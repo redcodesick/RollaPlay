@@ -8,6 +8,7 @@ RollaPlay (the RockNRolla Media Station) is a local-first Tauri 2 desktop app fo
 - **Playlists:** create and edit playlists, import/export M3U, M3U8 and WPL, and browse Spotify/YouTube-style cards with track tables. Playing a whole playlist advances only when the receiver reports a real `IdleReason.FINISHED`.
 - **Playback queue:** reorder by dragging the grip or with the arrow buttons, use `Play next in queue` on any row, and clear watch history without disturbing playlists or the queue.
 - **Cast:** real `_googlecast._tcp.local.` discovery fills an app-owned device menu under the Cast pill. Selecting a receiver opens Chrome's native Cast picker from a fully hidden embedded sender. There is no floating sender window and no "This PC" receiver.
+- **Downloader:** paste a YouTube video or playlist link, pick a folder, and get Cast-friendly H.264/AAC MP4 files that are indexed into the library automatically. Optional HD mode fetches FFmpeg on first use.
 - **Polished shell:** collapsible sidebar (preference persisted), Home playlist shelf, real Recently added and History pages, an About dialog with build details, and an exit confirmation that still shuts down cleanly.
 
 ## Architecture
@@ -20,7 +21,7 @@ RollaPlay (the RockNRolla Media Station) is a local-first Tauri 2 desktop app fo
 - **Cast streaming grants:** Google Cast receivers cannot send `Authorization` headers, so the media server also accepts a short-lived, media-scoped `cast_token` query credential. Grants live only in memory (12-hour sliding validity, 24-hour absolute ceiling, at most 8 live grants), authorize exactly one media id each, renew on receiver use, are revoked when the user stops playback, and never touch disk, logs, or diagnostics.
 - **Google Cast sender:** the official Web Sender SDK needs Chrome, so Rust detects a Chrome installation (registry `App Paths` first, then well-known install locations), runs a loopback-only bridge on `127.0.0.1:8790–8819` serving a dedicated sender page (`src-tauri/cast-sender/`), and launches Chrome in application mode against that secure local origin. The Chrome window is re-parented into the app window as a layered, fully transparent child: no second top-level window is visible and no browser area appears in the UI. Receiver discovery uses real mDNS queries with repeated multicast/unicast probes while the list is empty. Because the Web SDK cannot select a receiver by id, choosing a device arms the selected name and injects a trusted click into Chrome's hidden `#cast-trigger` so the native picker opens with that name as guidance. No connected state is reported until a real session event arrives. The desktop app remains the primary controller: casting a library video starts the media server and sender, generates a scoped streaming URL on the current LAN IPv4, and hands only the URL, MIME type, and title to the sender. Receiver state and `RemotePlayerController` events come back through the bridge (no frontend timers). The seek bar interpolates receiver-reported position for display only and never drives playlist advancement. Closing the app asks for confirmation, then stops receiver playback, shuts down the server, detaches the sender, stops Chrome, and destroys the window in that order. Watch history can be cleared from the History page. Playback state is persisted to SQLite (`playback_state`, `playback_history`) so disconnects and restarts never lose the current media reference. Cast diagnostics in Settings never display credentials.
 - **M3U/WPL playlists:** `.m3u`, `.m3u8` and `.wpl` files are scanned as playlists, not video media. Imports resolve references only to already indexed files under active roots; remote URLs are skipped, WPL UTF-16 BOMs and XML entities are handled, deleted imports are tombstoned, and exports write UTF-8 M3U/M3U8 or UTF-16LE WPL.
-- **Direct play only:** no FFmpeg, transcoding, remuxing, or external thumbnail service is included. The Cast Default Media Receiver plays the original MP4/M4V/WebM/MKV files; incompatible containers are rejected before casting.
+- **Direct play only:** Cast streams the original indexed files — no transcoding or remuxing at playback time. A built-in **Downloader** fetches Cast-friendly H.264/AAC MP4s from YouTube links and playlists so receiver-side codec mismatches are avoided before indexing.
 
 ## Build and run
 
@@ -42,6 +43,14 @@ App data (SQLite database, thumbnail cache, diagnostics log) lives under `%LOCAL
 
 The default grid preview is 320 × 180 at JPEG quality 82. The library screen offers small, medium, and large presets and three quality levels. Cache entries are invalidated when indexed file size or modification timestamp changes. A refresh action retries failed extractions; cache cleanup removes orphaned and interrupted temporary files.
 
+## YouTube Downloader
+
+Open **Downloader** in the sidebar, choose a destination folder, and paste one video link or a whole playlist link (one link per line). RollaPlay downloads Cast-friendly **H.264/AAC MP4** files, adds the folder to your library, and scans it automatically — the new videos appear in Recently added and can go straight into a Cast playlist.
+
+The installer stays small: the official `yt-dlp.exe` and, for HD quality, FFmpeg are downloaded on first use from their own GitHub releases into `%LOCALAPPDATA%\app.windowsmediastation.local\bin`. **Standard quality** uses a progressive 360p MP4 and needs no FFmpeg. Tick **HD quality** to merge 720p/1080p AVC video with AAC audio; the app fetches FFmpeg once via `scripts/install-downloader-tools.ps1`. Only YouTube links are accepted; downloads run without a shell and can be cancelled.
+
+This matters because the Cast Default Media Receiver on many TVs cannot decode **AV1/VP9** — those WebM files play audio but show a black picture. RollaPlay never transcodes during playback; the Downloader simply saves a compatible copy up front.
+
 ## Data and availability
 
 SQLite migrations add explicit media and directory availability states:
@@ -56,7 +65,7 @@ A scan is transactional. Cancelling or interrupting it before commit discards pa
 
 ## Development and tests
 
-Rust tests are defined in `src-tauri/src/lib.rs`, `src-tauri/src/media_server.rs`, `src-tauri/src/network.rs`, `src-tauri/src/cast_discovery.rs`, `src-tauri/src/cast_sender.rs`, `src-tauri/src/playlist.rs`, `src-tauri/src/playlist_file.rs`, `src-tauri/src/secret.rs`, and `src-tauri/src/thumbnail.rs`. The native Windows Shell thumbnail test is ignored unless a sample video is supplied through `WMS_TEST_VIDEO`, and can be enabled on Windows with `cargo test --manifest-path src-tauri/Cargo.toml windows_shell_extracts_and_encodes_a_video_thumbnail -- --ignored`.
+Rust tests are defined in `src-tauri/src/lib.rs`, `src-tauri/src/media_server.rs`, `src-tauri/src/network.rs`, `src-tauri/src/cast_discovery.rs`, `src-tauri/src/cast_sender.rs`, `src-tauri/src/downloader.rs`, `src-tauri/src/playlist.rs`, `src-tauri/src/playlist_file.rs`, `src-tauri/src/secret.rs`, and `src-tauri/src/thumbnail.rs`. The native Windows Shell thumbnail test is ignored unless a sample video is supplied through `WMS_TEST_VIDEO`, and can be enabled on Windows with `cargo test --manifest-path src-tauri/Cargo.toml windows_shell_extracts_and_encodes_a_video_thumbnail -- --ignored`.
 
 Cross-platform Rust unit tests cover cache safety/invalidation, migrations, scan cancellation/duplicates, rename and availability behavior, playlist preservation, M3U/WPL parsing/export and import tombstones, queue reorder and completion semantics, full/HEAD/range streaming, auth/path checks, MIME fallback, large/concurrent/interrupted streams, local CORS, port fallback, Cast streaming grants (scoping/expiry/revocation), receiver query-token authentication over HTTP, mDNS response parsing, Chrome detection/launch commands, sender asset hygiene, and Cast playback persistence.
 
@@ -68,4 +77,4 @@ RollaPlay is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) 
 
 ## Validation status
 
-On Windows the frontend build, Rust tests (77 passed, 1 ignored), and packaged NSIS/MSI builds have all been verified; recorded results are in [docs/windows-validation.md](docs/windows-validation.md). The user validated LAN Chromecast playback and receiver controls on 2026-11-23, but a follow-up run found that a finished video did not start the next one. The sender's stale media-session latch was fixed and the installers rebuilt; automatic `IdleReason.FINISHED` progression is pending re-validation on the receiver, tracked in [docs/cast-testing.md](docs/cast-testing.md). Hardware results are user-reported without per-item logs or screenshots.
+On Windows the frontend build, Rust tests (79 passed, 1 ignored), and packaged NSIS/MSI builds have all been verified; recorded results are in [docs/windows-validation.md](docs/windows-validation.md). The user validated LAN Chromecast playback and receiver controls on 2026-11-23, but a follow-up run found that a finished video did not start the next one. The sender's stale media-session latch was fixed and the installers rebuilt; automatic `IdleReason.FINISHED` progression is pending re-validation on the receiver, tracked in [docs/cast-testing.md](docs/cast-testing.md). Hardware results are user-reported without per-item logs or screenshots.

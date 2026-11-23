@@ -6,6 +6,7 @@ import { getName, getTauriVersion, getVersion } from '@tauri-apps/api/app'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import MediaLibrary from './components/MediaLibrary'
 import MediaServerSettings from './components/MediaServerSettings'
+import Downloader from './components/Downloader'
 import CastPanel from './components/CastPanel'
 import ConnectPanel from './components/ConnectPanel'
 import QueuePanel from './components/QueuePanel'
@@ -27,18 +28,19 @@ import { formatBytes, getLocalStatus, getMediaDirectories, getMediaFiles, isDesk
 import { debugLog } from './diagnostics'
 import {
   Aperture, AlertCircle, Cast, Check, ChevronDown, ChevronsLeft, ChevronsRight, CircleHelp,
-  Clapperboard, Clock3, Film, FolderPlus, Gauge, HardDrive, History, House, Info, Library,
+  Clapperboard, Clock3, Download, Film, FolderPlus, Gauge, HardDrive, History, House, Info, Library,
   ListMusic, MoreHorizontal, Pause, Play, Plus, Search, Settings2, ShieldCheck,
   SkipBack, SkipForward, SlidersHorizontal, Sparkles, Trash2, Volume2, VolumeX, Wifi, X,
 } from 'lucide-react'
 
-type View = 'Home' | 'Library' | 'Playlists' | 'Recently added' | 'History' | 'Settings'
+type View = 'Home' | 'Library' | 'Playlists' | 'Downloader' | 'Recently added' | 'History' | 'Settings'
 type Notice = (message: string, level?: Phase5Notification['level']) => void
 
 const navItems: { label: View; icon: typeof House }[] = [
   { label: 'Home', icon: House },
   { label: 'Library', icon: Library },
   { label: 'Playlists', icon: ListMusic },
+  { label: 'Downloader', icon: Download },
   { label: 'Recently added', icon: Clock3 },
   { label: 'History', icon: History },
 ]
@@ -780,6 +782,7 @@ function App() {
           </div>
         </header>
         {active === 'Settings' ? <SettingsView onManage={browse} onPlayback={() => setActive('Playlists')} />
+          : active === 'Downloader' ? <Downloader />
           : active === 'Library' ? <MediaLibrary searchQuery={query} selectedMediaIds={selectedMediaIds} onSelectionChange={setSelectedMediaIds} />
           : active === 'Playlists' ? <section className="section-page queue-page"><div className="section-eyebrow">YOUR COLLECTION</div><h1>Playlists &amp; queue</h1><p>Saved playlists first, then the active playback queue and receiver-driven playback controls.</p><QueuePanel snapshot={phase5Snapshot ?? null} castConnected={castConnected} selectedMediaIds={selectedMediaIds} onNotice={showNotice} onSelectionConsumed={() => setSelectedMediaIds([])} onTogglePlay={toggleCastPlay} isPlaying={castState === 'PLAYING'} onHistoryCleared={() => void mutatePhase5()} /></section>
           : active === 'Recently added' ? <section className="section-page">

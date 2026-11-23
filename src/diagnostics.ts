@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 
-export type DiagnosticArea = 'wizard' | 'media-folders' | 'playlists'
+export type DiagnosticArea = 'wizard' | 'media-folders' | 'playlists' | 'downloader'
 
 export function friendlyError(error: unknown): string {
   if (typeof error === 'string') return error
@@ -8,7 +8,7 @@ export function friendlyError(error: unknown): string {
   return String(error)
 }
 
-const SENSITIVE_KEY = /token|secret|password|credential|authorization|bearer|url|stream|path/i
+const SENSITIVE_KEY = /token|secret|password|credential|authorization|bearer|url|stream|path|directory|folder/i
 
 function redact(value: unknown, depth = 0): unknown {
   if (depth > 4) return '[depth]'

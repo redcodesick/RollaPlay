@@ -411,3 +411,38 @@
   .about-dialog,.confirm-dialog{padding:20px}
   .about-facts{grid-template-columns:1fr}
 }
+/* YouTube downloader */
+.downloader-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(260px,.9fr);gap:14px;margin-top:18px;align-items:start}
+.downloader-card{background:#181818;border:1px solid #303030;border-radius:12px;padding:18px}
+.download-card-head{display:flex;align-items:center;gap:11px;margin-bottom:16px}
+.download-card-icon{width:34px;height:34px;display:grid;place-items:center;border-radius:9px;background:rgba(255,140,50,.12);color:#ff8c32;flex:none}
+.download-card-head h2{margin:0;font:700 14px/1.2 Manrope,sans-serif;color:#f2f0ec}
+.download-card-head small{display:block;margin-top:3px;color:#999;font-size:10px}
+.download-folder-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 11px;border:1px solid #303030;border-radius:8px;background:#101010;margin-bottom:16px}
+.download-folder-row>span{color:#f2f0ec;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.download-label{display:block;color:#999;font-size:10px;letter-spacing:.4px;text-transform:uppercase;margin-bottom:7px}
+.download-links{width:100%;box-sizing:border-box;resize:vertical;padding:11px 12px;border:1px solid #303030;border-radius:8px;background:#101010;color:#f2f0ec;font:11px/1.7 inherit;outline:none}
+.download-links:focus{border-color:#ff8c32}
+.download-links::placeholder{color:#666}
+.download-check{display:flex;align-items:flex-start;gap:10px;margin:14px 0;padding:11px 12px;border:1px solid #303030;border-radius:8px;background:#101010;cursor:pointer}
+.download-check input{margin:2px 0 0;accent-color:#ff8c32;flex:none}
+.download-check strong{display:block;color:#f2f0ec;font-size:11px}
+.download-check small{display:block;margin-top:3px;color:#999;font-size:10px;line-height:1.5}
+.download-actions{display:flex;flex-wrap:wrap;align-items:center;gap:9px}
+.download-actions .button-primary{display:inline-flex;align-items:center;gap:8px}
+.download-hint{margin:12px 0 0;color:#999;font-size:10px;line-height:1.6}
+.download-tool-status{display:flex;flex-direction:column;gap:7px}
+.download-tool-status .status-pill{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid #303030;border-radius:7px;background:#101010;color:#999;font-size:10px}
+.download-tool-status .status-pill.ok{color:#f2f0ec;border-color:rgba(255,140,50,.35)}
+.download-install-detail{margin-top:12px;padding:9px 10px;border:1px solid rgba(255,140,50,.3);border-radius:7px;background:rgba(255,140,50,.07);color:#ffb27a;font-size:10px;line-height:1.5}
+.download-progress-list{margin-top:14px;display:flex;flex-direction:column;gap:8px}
+.download-progress-row{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid #303030;border-radius:7px;background:#101010}
+.download-phase{display:grid;place-items:center;width:22px;height:22px;border-radius:6px;background:#222;color:#999;flex:none}
+.phase-complete{color:#f2f0ec;background:rgba(255,140,50,.16)}
+.phase-failed{color:#e53935;background:rgba(229,57,53,.12)}
+.download-progress-copy{min-width:0}
+.download-progress-copy strong{display:block;color:#f2f0ec;font-size:10px}
+.download-progress-copy small{display:block;margin-top:2px;color:#999;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:900px){
+  .downloader-grid{grid-template-columns:1fr}
+}

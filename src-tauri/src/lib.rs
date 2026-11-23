@@ -15,6 +15,7 @@ use walkdir::WalkDir;
 
 mod cast_discovery;
 mod cast_sender;
+mod downloader;
 mod media_server;
 mod network;
 mod playback_orchestrator;
@@ -26,6 +27,7 @@ mod thumbnail;
 
 use cast_discovery::CastDevice;
 use cast_sender::{CastDiagnosticsSnapshot, CastEventReport, CastPlaybackSnapshot, CastSenderManager, CastSenderStatus};
+use downloader::{cancel_download, downloader_tools, prepare_tools, start_download};
 use media_server::{ConnectionTestResult, MediaServerManager, MediaServerStatus, StreamDiagnosticsSnapshot};
 use network::NetworkDiagnostics;
 use playback_orchestrator::PlaybackOrchestrator;
@@ -2474,6 +2476,7 @@ pub fn run() {
             app.manage(AppDatabase(Arc::clone(&database)));
             app.manage(ExitApproval::default());
             app.manage(ScanRegistry(Arc::new(Mutex::new(HashMap::new()))));
+            app.manage(downloader::DownloadState::default());
             app.manage(ThumbnailService {
                 cache_dir,
                 queue: Arc::new(Mutex::new(ThumbnailQueue::default())),
@@ -2511,6 +2514,7 @@ pub fn run() {
                     return;
                 }
                 let closing_window = window.clone();
+                closing_window.state::<downloader::DownloadState>().cancel();
                 let server = closing_window.state::<MediaServerManager>().inner().clone();
                 let cast = closing_window.state::<CastSenderManager>().inner().clone();
                 if server.shutdown_is_finished() {
@@ -2542,6 +2546,10 @@ pub fn run() {
             list_media_files,
             scan_media_directory,
             cancel_media_scan,
+            downloader_tools,
+            prepare_tools,
+            start_download,
+            cancel_download,
             import_playlist_files,
             export_playlist_file,
             get_thumbnail_settings,

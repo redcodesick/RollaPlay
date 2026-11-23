@@ -171,7 +171,7 @@ export function useMediaFolders() {
         return
       }
       const paths = Array.isArray(selection) ? selection : [selection]
-      debugLog('media-folders', 'picker_response', { count: paths.length, paths })
+      debugLog('media-folders', 'picker_response', { count: paths.length })
       let added = 0
       for (const path of paths) {
         const directory = await invokeTracked<MediaDirectory>('add_media_directory', { path }, 'media-folders')
