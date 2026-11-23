@@ -19,6 +19,7 @@ mod network;
 mod playback_orchestrator;
 mod playlist;
 mod secret;
+mod sender_embed;
 mod thumbnail;
 
 use cast_sender::{CastDiagnosticsSnapshot, CastEventReport, CastPlaybackSnapshot, CastSenderManager, CastSenderStatus};
@@ -1209,8 +1210,55 @@ fn get_cast_sender_status(cast: State<'_, CastSenderManager>) -> CastSenderStatu
 }
 
 #[tauri::command]
-async fn launch_cast_sender(cast: State<'_, CastSenderManager>) -> Result<CastSenderStatus, String> {
-    cast.launch().await
+async fn launch_cast_sender(
+    window: tauri::Window,
+    cast: State<'_, CastSenderManager>,
+) -> Result<CastSenderStatus, String> {
+    let status = cast.launch().await?;
+    // Every launch path (player bar, wizard, Cast panel) asks the app shell to
+    // show the in-window sender panel so the Chrome window is never left alone.
+    let _ = window.emit("cast-sender-launch-requested", ());
+    Ok(status)
+}
+
+#[cfg(windows)]
+fn app_window_handle(window: &tauri::Window) -> Result<isize, String> {
+    window.hwnd().map(|handle| handle.0 as isize).map_err(|error| error.to_string())
+}
+
+#[cfg(not(windows))]
+fn app_window_handle(_window: &tauri::Window) -> Result<isize, String> {
+    Err("Embedding the Cast sender is available on Windows only.".to_string())
+}
+
+/// Re-parents the managed Chrome sender window into the app's sender panel.
+#[tauri::command]
+fn embed_cast_sender(
+    window: tauri::Window,
+    cast: State<'_, CastSenderManager>,
+    rect: sender_embed::HostRect,
+) -> Result<bool, String> {
+    let handle = app_window_handle(&window)?;
+    sender_embed::embed(handle, cast.sender_pid(), rect)?;
+    Ok(sender_embed::embedded_window_is_valid())
+}
+
+#[tauri::command]
+fn show_cast_sender(window: tauri::Window, rect: sender_embed::HostRect) -> Result<bool, String> {
+    let handle = app_window_handle(&window)?;
+    sender_embed::show_embedded(handle, rect)?;
+    Ok(sender_embed::embedded_window_is_valid())
+}
+
+#[tauri::command]
+fn move_cast_sender(window: tauri::Window, rect: sender_embed::HostRect) -> Result<(), String> {
+    let handle = app_window_handle(&window)?;
+    sender_embed::move_embedded(handle, rect)
+}
+
+#[tauri::command]
+fn hide_cast_sender() -> Result<(), String> {
+    sender_embed::hide_embedded()
 }
 
 #[tauri::command]
@@ -1467,6 +1515,22 @@ async fn phase5_queue_add_playlist(
     mode: String,
 ) -> Result<playlist::PlaybackSnapshot, String> {
     let effects = orchestrator.engine().queue_add_playlist(playlist_id, phase5_add_mode(&mode))?;
+    Ok(phase5_finish(&orchestrator, effects).await)
+}
+
+/// Starts a saved playlist as one continuous Cast session. This replaces the
+/// queue, enables automatic advancement and loads the first available item.
+/// Advancing to the next item still requires a real receiver completion event
+/// correlated to the current playback token — no durations or timers are used.
+#[tauri::command]
+async fn phase5_play_playlist(
+    orchestrator: State<'_, PlaybackOrchestrator>,
+    playlist_id: i64,
+) -> Result<playlist::PlaybackSnapshot, String> {
+    let mut effects = orchestrator.engine().queue_clear()?;
+    effects.extend(orchestrator.engine().set_mode(PlaybackMode::Auto)?);
+    orchestrator.engine().select_playlist(playlist_id)?;
+    effects.extend(orchestrator.engine().queue_add_playlist(playlist_id, AddMode::PlayNow)?);
     Ok(phase5_finish(&orchestrator, effects).await)
 }
 
@@ -1830,11 +1894,9 @@ pub fn run() {
                 if !server.begin_shutdown() {
                     return;
                 }
-                if !server.begin_shutdown() {
-                    return;
-                }
                 tauri::async_runtime::spawn(async move {
                     server.shutdown().await;
+                    sender_embed::detach_embedded();
                     cast.shutdown().await;
                     let _ = closing_window.destroy();
                 });
@@ -1866,6 +1928,10 @@ pub fn run() {
             clear_media_stream_diagnostics,
             get_cast_sender_status,
             launch_cast_sender,
+            embed_cast_sender,
+            show_cast_sender,
+            move_cast_sender,
+            hide_cast_sender,
             stop_cast_sender,
             get_cast_diagnostics,
             get_cast_playback_state,
@@ -1884,6 +1950,7 @@ pub fn run() {
             phase5_reorder_playlist_item,
             phase5_queue_add,
             phase5_queue_add_playlist,
+            phase5_play_playlist,
             phase5_queue_remove,
             phase5_queue_reorder,
             phase5_queue_clear,

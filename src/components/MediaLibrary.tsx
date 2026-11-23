@@ -188,7 +188,7 @@ export default function MediaLibrary({
         const device = castDeviceName(await getCastPlaybackState().catch(() => null))
         setNotice(device
           ? `Casting ${media.filename} to ${device}.`
-          : `Casting ${media.filename}. Choose your TV in the Chrome sender window if it opens.`)
+          : `Casting ${media.filename}. Choose your TV in the sender panel if it opens.`)
       })
       .catch((error) => {
         setErrorMessage(typeof error === 'string' ? error : error instanceof Error ? error.message : String(error))

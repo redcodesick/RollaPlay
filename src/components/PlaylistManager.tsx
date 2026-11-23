@@ -5,8 +5,8 @@ import {
 } from 'lucide-react'
 import {
   addPlaylistItems, createPlaylist, deletePlaylist, formatDuration, getPlaybackState,
-  isPlaylistAvailable, listPlaylistItems, listPlaylists, playMediaNow, queueAdd, queueAddPlaylist,
-  removePlaylistItem, renamePlaylist, reorderPlaylistItem, selectPlaylist,
+  isPlaylistAvailable, listPlaylistItems, listPlaylists, playMediaNow, playPlaylist,
+  queueAdd, queueAddPlaylist, removePlaylistItem, renamePlaylist, reorderPlaylistItem, selectPlaylist,
   type PlaybackSnapshot, type PlaylistItem, type PlaylistSummary,
 } from '../playlist'
 import { debugLog, friendlyError } from '../diagnostics'
@@ -97,6 +97,19 @@ export default function PlaylistManager({
     })
   }
 
+  function playWholePlaylist(playlist: PlaylistSummary) {
+    if (!playlist.item_count) {
+      onNotice(`“${playlist.name}” is empty. Add videos first.`, 'warning')
+      return
+    }
+    debugLog('playlists', 'button_click', { control: 'play_playlist', playlistId: playlist.id })
+    void guard(async () => {
+      setSelectedPlaylist(playlist.id)
+      await playPlaylist(playlist.id)
+      onNotice(`Playing “${playlist.name}” on the Cast device. Each video advances when the TV reports it finished — no durations needed.`, 'success')
+    })
+  }
+
   return (
     <section className={`queue-section playlist-manager ${compact ? 'playlist-manager-compact' : ''}`} aria-labelledby={titleId}>
       <div className="queue-section-head">
@@ -133,6 +146,7 @@ export default function PlaylistManager({
               <ChevronRight size={16} />
             </button>
             <div className="playlist-card-actions">
+              <button className="playlist-play" onClick={() => playWholePlaylist(playlist)} disabled={busy || !playlist.item_count || !available} title="Play whole playlist" aria-label={`Play ${playlist.name}`}><Play size={14} fill="currentColor" /></button>
               <button onClick={() => { setRenaming(playlist.id); setRenameValue(playlist.name) }} disabled={busy} title="Rename" aria-label={`Rename ${playlist.name}`}><RefreshCw size={14} /></button>
               <button onClick={() => void guard(async () => {
                 await queueAddPlaylist(playlist.id, 'append')
@@ -165,6 +179,10 @@ export default function PlaylistManager({
       {selectedPlaylist != null && <div className="playlist-detail">
         <div className="playlist-detail-head">
           <h3>{playlists.find((playlist) => playlist.id === selectedPlaylist)?.name ?? 'Playlist'}</h3>
+          <button className="playlist-detail-play" onClick={() => {
+            const playlist = playlists.find((item) => item.id === selectedPlaylist)
+            if (playlist) playWholePlaylist(playlist)
+          }} disabled={busy || !items.length || !available}><Play size={14} fill="currentColor" /> Play playlist</button>
           <button className="queue-primary" onClick={() => {
             const ids = requireSelection()
             if (!ids.length) return

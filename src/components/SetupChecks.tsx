@@ -40,7 +40,7 @@ export function ChromeCheck({ onNotice }: { onNotice: Notice }) {
     try {
       const status = await launchCastSender()
       await mutate(status, { revalidate: false })
-      onNotice(status.chrome_installed ? 'Chrome sender window launch requested.' : 'Google Chrome was not found on this device.', status.chrome_installed ? 'success' : 'warning')
+      onNotice(status.chrome_installed ? 'Cast sender started in the sender panel.' : 'Google Chrome was not found on this device.', status.chrome_installed ? 'success' : 'warning')
     } catch (launchError) {
       diagnosticError('wizard', 'launch_cast_sender_failed', launchError)
       onNotice(friendlyError(launchError), 'error')
@@ -132,7 +132,7 @@ export function CastCheck({ onNotice }: { onNotice: Notice }) {
       onNotice(
         device
           ? `Cast sender ready. Casting to ${device}; no need to choose a device again.`
-          : 'Cast sender ready. Choose your TV in the Chrome sender window.',
+          : 'Cast sender ready. Choose your TV in the sender panel.',
         device ? 'success' : 'info',
       )
     } catch (launchError) {

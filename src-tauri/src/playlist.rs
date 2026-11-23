@@ -1409,6 +1409,29 @@ mod tests {
     }
 
     #[test]
+    fn playing_a_whole_playlist_auto_advances_on_real_completion() {
+        let fixture = Fixture::new();
+        let ids = fixture.media_ids(3);
+        let playlist_id = fixture.engine.create_playlist("Road trip".to_string()).unwrap();
+        assert_eq!(fixture.engine.add_playlist_items(playlist_id, &ids).unwrap(), 3);
+        fixture.engine.queue_clear().unwrap();
+        fixture.engine.set_mode(PlaybackMode::Auto).unwrap();
+        let effects = fixture.engine.queue_add_playlist(playlist_id, AddMode::PlayNow).unwrap();
+        let (_, _, token) = Fixture::load_effect(&effects);
+        let first = fixture.engine.snapshot().queue[0].entry_id.clone();
+        assert_eq!(fixture.engine.snapshot().queue.len(), 3);
+        assert_eq!(fixture.engine.snapshot().current_entry_id, Some(first));
+
+        // The receiver's correlated FINISHED event — not an estimated duration
+        // or a timer — is what moves the playlist to its next video.
+        fixture.engine.on_cast_event(Fixture::status(&token, "PLAYING", 5.0));
+        fixture.engine.on_cast_event(Fixture::completes(&token));
+        let snapshot = fixture.engine.snapshot();
+        assert_eq!(snapshot.mode, PlaybackMode::Auto);
+        assert_eq!(snapshot.current_entry_id.as_ref().unwrap(), &snapshot.queue[1].entry_id);
+    }
+
+    #[test]
     fn selecting_and_deleting_the_selected_playlist_do_not_deadlock() {
         let fixture = Fixture::new();
         let ids = fixture.media_ids(2);

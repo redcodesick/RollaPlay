@@ -166,11 +166,15 @@
 .playlist-open strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}
 .playlist-open small{color:#85828e;font-size:8px}
 .playlist-card-actions{display:flex;justify-content:flex-end;gap:2px;margin-top:5px}
+.playlist-card-actions button.playlist-play{background:#b8a1e8;color:#14121b;border-color:#b8a1e8;width:28px;height:28px}
+.playlist-card-actions button.playlist-play:hover:not(:disabled){background:#d0bcf7;color:#14121b;border-color:#d0bcf7}
+.playlist-card-actions button.playlist-play:disabled,.playlist-detail-play:disabled{opacity:.45;cursor:not-allowed}
 .playlist-rename{display:flex;gap:4px;margin-top:7px}
 .playlist-rename input{height:28px}
 .playlist-detail{margin-top:13px;padding-top:13px;border-top:1px solid var(--line)}
 .playlist-detail-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px}
 .playlist-detail-head h3{margin:0;font:600 12px Manrope,sans-serif}
+.playlist-detail-play{display:inline-flex;align-items:center;gap:6px;padding:0 10px;height:27px;border:0;border-radius:6px;background:#b8a1e8;color:#14121b;font:600 9px Manrope,sans-serif;cursor:pointer}
 .playlist-items{display:flex;flex-direction:column;gap:3px;max-height:250px;overflow:auto}
 .playlist-item{display:flex;align-items:center;gap:7px;min-height:34px;padding:4px 7px;border:1px solid var(--line);border-radius:6px;background:#0d0e13;color:#d3cfda;font-size:9px}
 .playlist-item.missing{opacity:.6}
@@ -193,6 +197,21 @@
 .phase5-toast.toast-warning{border-color:rgba(232,195,132,.3);color:#e8c384}
 .phase5-toast.toast-error{border-color:rgba(234,128,128,.3);color:#e2aaa7}
 .phase5-toast button{margin-left:auto;width:22px;height:22px;display:grid;place-items:center;border:0;background:transparent;color:inherit;cursor:pointer}
+.sender-dock{position:fixed;z-index:25;right:20px;bottom:108px;width:392px;padding:9px;border:1px solid rgba(184,157,243,.3);border-radius:11px;background:#121016;box-shadow:0 18px 50px rgba(0,0,0,.62)}
+.sender-dock-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;font:700 9px Manrope,sans-serif;letter-spacing:1.4px;color:#c4b0ee}
+.sender-dock-head span{display:inline-flex;align-items:center;gap:6px}
+.sender-dock-head button{width:22px;height:22px;display:grid;place-items:center;border:1px solid var(--line);border-radius:5px;background:transparent;color:#9c99a5;cursor:pointer}
+.sender-dock-head button:hover{color:#e6def7;border-color:rgba(184,157,243,.4)}
+.sender-host{width:100%;height:270px;border:1px solid var(--line);border-radius:7px;background:#0a0a0d;overflow:hidden}
+.sender-dock-note{margin:7px 2px 0;font-size:9px;line-height:1.5;color:#8f8b9c}
+.recent-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:9px}
+.recent-card{display:flex;flex-direction:column;gap:5px;padding:8px;border:1px solid var(--line);border-radius:9px;background:#111217;text-align:left;cursor:pointer;transition:border-color .18s,background .18s}
+.recent-card:hover{border-color:rgba(184,157,243,.4);background:#17151f}
+.recent-art{height:70px;display:grid;place-items:center;overflow:hidden;border-radius:6px;background:linear-gradient(135deg,#1d1a27,#14141a);color:#bba6e8}
+.recent-art img{width:100%;height:100%;object-fit:cover}
+.recent-card strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:#ded9e8}
+.recent-card small{color:#77747f;font-size:8px}
+@media(max-width:600px){.sender-dock{right:10px;bottom:122px;width:calc(100vw - 20px)}.sender-host{height:220px}}
 @media(max-width:840px){.queue-modes{gap:6px}.queue-section{padding:11px}.library-selection-bar .selection-hint{display:none}}
 @media(max-width:600px){.queue-page{padding-top:20px}.queue-section{padding:9px}.queue-section-head h2{font-size:14px}.queue-mode-switch button,.queue-repeat button{padding:0 7px}.queue-repeat button span{display:none}.queue-item{flex-wrap:wrap}.queue-item-copy{min-width:calc(100% - 90px)}.queue-item-actions{margin-left:auto}.playlist-grid{grid-template-columns:1fr}.phase5-toast{right:10px;bottom:122px;left:10px;max-width:none}}
 .setup-dialog-wide{width:min(100%,720px);max-height:min(88vh,900px);overflow:auto;padding-bottom:16px}

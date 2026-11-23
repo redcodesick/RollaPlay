@@ -13,11 +13,11 @@ import {
 } from '../cast'
 
 const senderWindowLabels: Record<string, string> = {
-  not_launched: 'Sender window not started',
-  launching: 'Starting the Chrome sender window…',
-  running: 'Chrome sender window connected',
-  closed: 'Sender window closed',
-  failed: 'Sender window failed',
+  not_launched: 'Cast sender not started',
+  launching: 'Starting the Cast sender panel…',
+  running: 'Cast sender connected',
+  closed: 'Cast sender closed',
+  failed: 'Cast sender failed',
 }
 
 function formatAgo(ms: number | null) {
@@ -168,13 +168,13 @@ export default function CastPanel() {
         <div className="cast-controls-heading">
           <div>
             <h3>Cast sender</h3>
-            <p>The player stays in this window. A small Chrome sender opens only to run the official Cast SDK and pick a receiver; once selected, it stays connected.</p>
+            <p>The player stays in this window. Chrome runs only the official Cast SDK inside the sender panel; once a receiver is selected it stays connected, and hiding the panel does not stop playback.</p>
           </div>
           <div className="cast-controls-actions">
-            <button className="button-primary" onClick={() => runAction(() => launchCastSender(), connectedDevice ? `Sender ready. Casting to ${connectedDevice}.` : 'Sender ready. Choose your TV in the Chrome sender window.')} disabled={!isDesktop || isWorking}>
+            <button className="button-primary" onClick={() => runAction(() => launchCastSender(), connectedDevice ? `Sender ready. Casting to ${connectedDevice}.` : 'Sender ready. Choose your TV in the sender panel.')} disabled={!isDesktop || isWorking}>
               {isWorking ? <LoaderCircle size={15} className="spin-icon" /> : <Cast size={15} />} Launch sender
             </button>
-            <button className="folder-action" onClick={() => runAction(() => stopCastSender(), 'The Cast sender window was closed.')} disabled={!isDesktop || isWorking}>Close sender</button>
+            <button className="folder-action" onClick={() => runAction(() => stopCastSender(), 'The Cast sender was closed.')} disabled={!isDesktop || isWorking}>Close sender</button>
           </div>
         </div>
         {status?.last_error && <p className="cast-error-line" role="status"><AlertCircle size={14} />{status.last_error}</p>}

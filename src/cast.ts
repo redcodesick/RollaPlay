@@ -84,8 +84,15 @@ export const isCastSupportedExtension = (extension: string) =>
 
 export const isCastAvailable = () => isTauri()
 
+export type SenderHostRect = { x: number; y: number; width: number; height: number }
+
 export const getCastSenderStatus = () => invoke<CastSenderStatus>('get_cast_sender_status')
 export const launchCastSender = () => invoke<CastSenderStatus>('launch_cast_sender')
+/** Embeds the managed Chrome sender window into the in-app sender panel. */
+export const embedCastSender = (rect: SenderHostRect) => invoke<boolean>('embed_cast_sender', { rect })
+export const showCastSender = (rect: SenderHostRect) => invoke<boolean>('show_cast_sender', { rect })
+export const moveCastSender = (rect: SenderHostRect) => invoke<void>('move_cast_sender', { rect })
+export const hideCastSender = () => invoke<void>('hide_cast_sender')
 export const stopCastSender = () => invoke<CastSenderStatus>('stop_cast_sender')
 export const getCastDiagnostics = () => invoke<CastDiagnostics>('get_cast_diagnostics')
 export const getCastPlaybackState = () => invoke<CastPlaybackSnapshot>('get_cast_playback_state')

@@ -727,6 +727,20 @@ impl CastSenderManager {
             .clone()
     }
 
+    /// Browser process id of the live managed sender, used to embed its window.
+    pub fn sender_pid(&self) -> Option<u32> {
+        self.inner
+            .chrome
+            .try_lock()
+            .ok()
+            .and_then(|mut guard| {
+                guard.as_mut().and_then(|child| match child.child.try_wait() {
+                    Ok(None) => Some(child.pid),
+                    _ => None,
+                })
+            })
+    }
+
     /// Marks a media load as pending so the next `media_loaded` event can be
     /// attributed to it.
     pub fn set_pending_load(&self, media_file_id: i64, filename: String) {

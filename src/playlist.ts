@@ -102,6 +102,9 @@ export const queueAdd = (mediaFileIds: number[], mode: QueueAddMode) =>
   call<PlaybackSnapshot>('phase5_queue_add', { mediaFileIds, mode })
 export const queueAddPlaylist = (playlistId: number, mode: QueueAddMode) =>
   call<PlaybackSnapshot>('phase5_queue_add_playlist', { playlistId, mode })
+/** Replaces the queue with the whole playlist and starts it in automatic mode. */
+export const playPlaylist = (playlistId: number) =>
+  call<PlaybackSnapshot>('phase5_play_playlist', { playlistId })
 export const queueRemove = (entryId: string) =>
   call<PlaybackSnapshot>('phase5_queue_remove', { entryId })
 export const queueReorder = (entryId: string, targetPosition: number) =>

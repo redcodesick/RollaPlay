@@ -19,7 +19,7 @@
 Run on any machine with Rust/Cargo and the Tauri target prerequisites:
 `cargo test --manifest-path src-tauri/Cargo.toml`
 
-These tests were executed in this packaged-app validation run: 56 passed, 0 failed, 1 ignored (the Windows Shell thumbnail test needs a registered video thumbnail provider).
+These tests were executed in this packaged-app validation run: 57 passed, 0 failed, 1 ignored (the Windows Shell thumbnail test needs a registered video thumbnail provider). The new `playing_a_whole_playlist_auto_advances_on_real_completion` test covers whole-playlist automatic advancement on a correlated receiver completion event.
 
 - Cast grant store: media scoping, wrong-media rejection, empty-token rejection, revocation.
 - Grant expiry: sliding 12-hour renewal, absolute 24-hour ceiling, expired-token rejection.
@@ -39,7 +39,7 @@ These tests were executed in this packaged-app validation run: 56 passed, 0 fail
 ### Chrome sender
 
 - [ ] 1. Chrome detection: install Chrome system-wide (and repeat with a per-user install); Settings → Cast shows "Detected" with the correct path (registry then Program Files then per-user precedence). Uninstall Chrome → the panel shows "Chrome is not installed" and the cast button in the library shows the same guidance instead of a crash.
-- [ ] 2. Chrome launch: click **Launch sender**; an application-mode Chrome window opens on `http://127.0.0.1:<port>/` with no address bar, no first-run dialog, and only one window even when pressed twice.
+- [ ] 2. Chrome launch: click **Launch sender**; Chrome runs in application mode on `http://127.0.0.1:<port>/` with no address bar or first-run dialog, and its window is embedded in the app's sender panel — no separate floating "Cast Sender" window. The panel stays open until a receiver is selected, then hides itself while the Cast session and app playback controls remain active.
 - [ ] 3. Google Cast SDK initialization: the sender window shows "Official Cast sender SDK ready"; DevTools (if opened) shows `cast.framework` available. With the network disconnected it must show the "Cast framework could not load" error instead of hanging.
 
 ### Device discovery and session
