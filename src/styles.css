@@ -357,3 +357,16 @@
 .playlist-manager-compact .playlist-items{max-height:170px}
 .playlist-manager-busy{display:flex;align-items:center;gap:7px;margin-top:8px;color:#ff8c32;font-size:9px}
 
+.feature-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.feature-content h2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:360px}
+.feature-button:hover{border-color:#ff8c32;background:rgba(255,140,50,.16)}
+.feature-secondary{height:34px;padding:0 10px;border:1px solid #303030;border-radius:6px;background:transparent;color:#f2f0ec;font-size:9px;cursor:pointer}
+.feature-secondary:hover{border-color:#ff8c32;color:#ff8c32}
+.home-playlist-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(116px,1fr));gap:10px}
+.home-playlist-card{min-width:0}
+.home-playlist-card .playlist-cover{width:100%;border:0;color:#f2f0ec;cursor:pointer;transition:transform .18s}
+.home-playlist-card .playlist-cover:hover{transform:translateY(-2px)}
+.home-playlist-name{width:100%;display:flex;flex-direction:column;gap:2px;margin-top:7px;padding:0;border:0;background:transparent;color:#f2f0ec;text-align:left;cursor:pointer}
+.home-playlist-name strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}
+.home-playlist-name small{color:#999;font-size:8px}
+.history-page-list{max-height:none}

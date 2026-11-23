@@ -17,10 +17,10 @@ import {
   playerStateLabel, showCastSender, type SenderHostRect,
 } from './cast'
 import {
-  getPlaybackState, isPlaylistAvailable, listPlaylists, playMediaNow, playNext, playPrevious,
-  type Phase5Notification, type PlaybackSnapshot,
+  formatDuration, getPlaybackState, isPlaylistAvailable, listPlaylists, playMediaNow, playNext,
+  playPlaylist, playPrevious, type Phase5Notification, type PlaybackSnapshot, type PlaylistSummary,
 } from './playlist'
-import { formatBytes, getLocalStatus, getMediaDirectories, getMediaFiles, isDesktopApp } from './media'
+import { formatBytes, getLocalStatus, getMediaDirectories, getMediaFiles, isDesktopApp, type MediaFile } from './media'
 import { debugLog } from './diagnostics'
 import {
   Aperture, AlertCircle, Cast, Check, ChevronDown, CircleHelp, Clapperboard, Clock3,
@@ -79,6 +79,104 @@ function EmptyLibrary({ onSetup, onBrowse }: { onSetup: () => void; onBrowse: ()
       <div className="empty-actions"><button className="button-primary" onClick={onBrowse}><FolderPlus size={18} /> Add media folder</button><button className="button-text" onClick={onSetup}>Walk me through setup <span>→</span></button></div>
       <div className="format-note"><span>SUPPORTS</span><b>MP4</b><i /> <b>MKV</b><i /> <b>MOV</b><i /> <b>AVI</b><i /> <b>AND MORE</b></div>
     </section>
+  )
+}
+
+function RecentGrid({ files, limit = 6, onPlay }: { files: MediaFile[]; limit?: number; onPlay: (id: number) => void }) {
+  return (
+    <div className="recent-grid">
+      {files.slice(0, limit).map((media) => <button
+        key={media.id}
+        className="recent-card"
+        title={`Play ${media.filename}`}
+        onClick={() => onPlay(media.id)}
+      >
+        <span className="recent-art">{media.thumbnail_status === 'ready' && media.thumbnail_path
+          ? <img src={convertFileSrc(media.thumbnail_path)} alt="" />
+          : <Film size={18} />}</span>
+        <strong>{media.filename}</strong>
+        <small>{formatBytes(media.size_bytes)}</small>
+      </button>)}
+    </div>
+  )
+}
+
+function HomeSpotlight({
+  playlists, recentFiles, onPlayPlaylist, onPlayMedia, onBrowse, onOpenPlaylists,
+}: {
+  playlists: PlaylistSummary[] | undefined
+  recentFiles: MediaFile[] | undefined
+  onPlayPlaylist: (id: number) => void
+  onPlayMedia: (id: number) => void
+  onBrowse: () => void
+  onOpenPlaylists: () => void
+}) {
+  const playlist = playlists?.[0]
+  const latest = recentFiles?.[0]
+  const title = playlist?.name ?? latest?.filename ?? 'Your library. Ready when you are.'
+  const detail = playlist
+    ? `${playlist.item_count} video${playlist.item_count === 1 ? '' : 's'} · ${formatDuration(playlist.duration_seconds)} · set up for your TV.`
+    : latest
+      ? `${formatBytes(latest.size_bytes)} · the newest addition to your collection.`
+      : 'Add a folder with your local videos and RollaPlay will index it here.'
+  const play = () => {
+    if (playlist) onPlayPlaylist(playlist.id)
+    else if (latest) onPlayMedia(latest.id)
+    else onBrowse()
+  }
+  const action = playlist ? 'Play playlist' : latest ? 'Play latest add' : 'Add media folder'
+  return (
+    <section className="featured-card">
+      <img src="/media/featured-still.png" alt="" />
+      <div className="feature-overlay" />
+      <div className="feature-content">
+        <div className="feature-tag"><span /> {playlist ? 'PLAYLIST OF THE MOMENT' : latest ? 'FRESH IN YOUR LIBRARY' : 'YOUR MEDIA SPACE'}</div>
+        <h2 title={title}>{title}</h2>
+        <p>{detail}</p>
+        <div className="feature-actions">
+          <button className="feature-button" onClick={play}>
+            {playlist || latest ? <Play size={17} /> : <FolderPlus size={17} />} {action} <span>→</span>
+          </button>
+          {playlist && <button className="feature-secondary" onClick={onOpenPlaylists}>All playlists</button>}
+        </div>
+      </div>
+      <div className="feature-side-note"><span>{String(playlists?.length ?? 0).padStart(2, '0')}</span><i /> PLAYLISTS SAVED</div>
+      <div className="feature-pagination"><span className="selected" /><span /><span /></div>
+    </section>
+  )
+}
+
+const homePlaylistTones = ['tone-red', 'tone-amber', 'tone-paper', 'tone-steel']
+
+function HomePlaylistShelf({
+  playlists, onPlay, onOpenAll,
+}: {
+  playlists: PlaylistSummary[] | undefined
+  onPlay: (id: number) => void
+  onOpenAll: () => void
+}) {
+  if (!playlists?.length) return null
+  return (
+    <div className="library-summary home-playlists">
+      <div className="summary-title">
+        <div><div className="section-eyebrow">YOUR COLLECTION</div><h2>Your playlists</h2></div>
+        <button className="text-link" onClick={onOpenAll}>See all <span>→</span></button>
+      </div>
+      <div className="home-playlist-grid">
+        {playlists.slice(0, 4).map((playlist, index) => <div className="home-playlist-card" key={playlist.id}>
+          <button
+            className={`playlist-cover ${homePlaylistTones[index % homePlaylistTones.length]}`}
+            onClick={() => onPlay(playlist.id)}
+            aria-label={`Play ${playlist.name}`}
+            title={`Play ${playlist.name}`}
+          ><Play size={18} fill="currentColor" /></button>
+          <button className="home-playlist-name" onClick={onOpenAll}>
+            <strong title={playlist.name}>{playlist.name}</strong>
+            <small>{playlist.item_count} video{playlist.item_count === 1 ? '' : 's'}</small>
+          </button>
+        </div>)}
+      </div>
+    </div>
   )
 }
 
@@ -302,6 +400,12 @@ function App() {
     setSetupDone(true)
     debugLog('wizard', 'setup_completed')
   }, [])
+  const playSelectedMedia = useCallback((id: number) => {
+    void playMediaNow(id).then(() => mutatePhase5()).catch((error) => showNotice(String(error), 'error'))
+  }, [mutatePhase5, showNotice])
+  const playSelectedPlaylist = useCallback((id: number) => {
+    void playPlaylist(id).then(() => mutatePhase5()).catch((error) => showNotice(String(error), 'error'))
+  }, [mutatePhase5, showNotice])
   useEffect(() => {
     if (!isDesktopApp()) return
     let disposed = false
@@ -551,24 +655,42 @@ function App() {
             </div>
           </div>
         </header>
-        {active === 'Settings' ? <SettingsView onManage={browse} onPlayback={() => setActive('Playlists')} /> : active === 'Library' ? <MediaLibrary searchQuery={query} selectedMediaIds={selectedMediaIds} onSelectionChange={setSelectedMediaIds} /> : active === 'Playlists' ? <section className="section-page queue-page"><div className="section-eyebrow">YOUR COLLECTION</div><h1>Playlists &amp; queue</h1><p>Saved playlists first, then the active playback queue and receiver-driven playback controls.</p><QueuePanel snapshot={phase5Snapshot ?? null} castConnected={castConnected} selectedMediaIds={selectedMediaIds} onNotice={showNotice} onSelectionConsumed={() => setSelectedMediaIds([])} onTogglePlay={toggleCastPlay} isPlaying={castState === 'PLAYING'} onHistoryCleared={() => void mutatePhase5()} /></section> : active === 'History' || active === 'Recently added' ? <section className="section-page"><div className="section-eyebrow">YOUR COLLECTION</div><h1>{pageTitle}</h1><p>{active === 'History' ? 'Your playback history appears in the Playlists & queue panel.' : 'New additions to your library will appear here.'}</p><EmptyLibrary onSetup={openSetup} onBrowse={browse} /></section> : <>
+        {active === 'Settings' ? <SettingsView onManage={browse} onPlayback={() => setActive('Playlists')} />
+          : active === 'Library' ? <MediaLibrary searchQuery={query} selectedMediaIds={selectedMediaIds} onSelectionChange={setSelectedMediaIds} />
+          : active === 'Playlists' ? <section className="section-page queue-page"><div className="section-eyebrow">YOUR COLLECTION</div><h1>Playlists &amp; queue</h1><p>Saved playlists first, then the active playback queue and receiver-driven playback controls.</p><QueuePanel snapshot={phase5Snapshot ?? null} castConnected={castConnected} selectedMediaIds={selectedMediaIds} onNotice={showNotice} onSelectionConsumed={() => setSelectedMediaIds([])} onTogglePlay={toggleCastPlay} isPlaying={castState === 'PLAYING'} onHistoryCleared={() => void mutatePhase5()} /></section>
+          : active === 'Recently added' ? <section className="section-page">
+            <div className="section-eyebrow">YOUR COLLECTION</div>
+            <h1>{pageTitle}</h1>
+            <p>The newest videos indexed from your local folders.</p>
+            {recentFiles && recentFiles.length > 0
+              ? <RecentGrid files={recentFiles} limit={24} onPlay={playSelectedMedia} />
+              : <EmptyLibrary onSetup={openSetup} onBrowse={browse} />}
+          </section>
+          : active === 'History' ? <section className="section-page">
+            <div className="section-eyebrow">ACTIVITY</div>
+            <h1>{pageTitle}</h1>
+            <p>Recorded from real receiver playback only.</p>
+            <div className="history-list history-page-list">
+              {phase5Snapshot?.history.length ? phase5Snapshot.history.map((entry) => (
+                <div key={entry.id} className="history-row"><Clock3 size={14} /><span title={entry.filename}>{entry.filename}</span><small>{entry.completion_state ?? 'started'}</small><small>{formatSeconds(entry.watched_seconds)}</small></div>
+              )) : <div className="playlist-empty">No playback recorded yet.</div>}
+            </div>
+          </section>
+          : <>
           <section className="welcome-row"><div><div className="section-eyebrow"><span className="eyebrow-line" /> YOUR PERSONAL MEDIA SPACE</div><h1>Good evening<span className="title-period">.</span></h1><p>Your movies, your space. All stored locally.</p></div><button className="quick-add" onClick={browse}><Plus size={17} /> Add media</button></section>
-          <section className="featured-card"><img src="/media/featured-still.png" alt="Cinematic scene of a figure in a rain-lit city at night" /><div className="feature-overlay" /><div className="feature-content"><div className="feature-tag"><span /> MADE FOR YOUR LIVING ROOM</div><h2>Your library.<br /><em>Your rules.</em></h2><p>Bring your local video collection together and stream directly to your TV. No subscriptions. No uploads. Just your media.</p><button className="feature-button" onClick={browse}><FolderPlus size={17} /> Add your first folder <span>→</span></button></div><div className="feature-side-note"><span>01</span><i /> PRIVATE BY DESIGN</div><div className="feature-pagination"><span className="selected" /><span /><span /></div></section>
-          <div className="library-summary"><div className="summary-title"><div><div className="section-eyebrow">YOUR COLLECTION</div><h2>Recently added</h2></div><button className="text-link" onClick={() => setActive('Library')}>View library <span>→</span></button></div>
-             {recentFiles && recentFiles.length > 0 ? <div className="recent-grid">
-               {recentFiles.slice(0, 6).map((media) => <button
-                 key={media.id}
-                 className="recent-card"
-                 title={`Play ${media.filename}`}
-                 onClick={() => { void playMediaNow(media.id).then(() => mutatePhase5()).catch((error) => showNotice(String(error), 'error')) }}
-               >
-                 <span className="recent-art">{media.thumbnail_status === 'ready' && media.thumbnail_path
-                   ? <img src={convertFileSrc(media.thumbnail_path)} alt="" />
-                   : <Film size={18} />}</span>
-                 <strong>{media.filename}</strong>
-                 <small>{formatBytes(media.size_bytes)}</small>
-               </button>)}
-             </div> : <EmptyLibrary onSetup={openSetup} onBrowse={browse} />}
+          <HomeSpotlight
+            playlists={playlists}
+            recentFiles={recentFiles}
+            onPlayPlaylist={playSelectedPlaylist}
+            onPlayMedia={playSelectedMedia}
+            onBrowse={browse}
+            onOpenPlaylists={() => setActive('Playlists')}
+          />
+          <HomePlaylistShelf playlists={playlists} onPlay={playSelectedPlaylist} onOpenAll={() => setActive('Playlists')} />
+          <div className="library-summary"><div className="summary-title"><div><div className="section-eyebrow">YOUR COLLECTION</div><h2>Recently added</h2></div><button className="text-link" onClick={() => setActive('Recently added')}>View all <span>→</span></button></div>
+             {recentFiles && recentFiles.length > 0
+               ? <RecentGrid files={recentFiles} onPlay={playSelectedMedia} />
+               : <EmptyLibrary onSetup={openSetup} onBrowse={browse} />}
            </div>
           {!setupDone && <>
             <div className="content-heading first-steps-heading"><div><div className="section-eyebrow">START HERE</div><h2>Make it yours</h2></div><button className="text-link" onClick={openSetup}>Setup guide <span>→</span></button></div>
