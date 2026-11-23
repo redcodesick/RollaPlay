@@ -3,7 +3,7 @@ import { useSWRConfig } from 'swr'
 import { open } from '@tauri-apps/plugin-dialog'
 import { AlertCircle, Check, Download, FolderOpen, LoaderCircle, X } from 'lucide-react'
 import { getMediaDirectories, isDesktopApp, type MediaDirectory, type ScanResult } from '../media'
-import { diagnosticError, friendlyError, invokeTracked } from '../diagnostics'
+import { debugLog, diagnosticError, friendlyError, invokeTracked } from '../diagnostics'
 import {
   cancelDownload, getDownloaderTools, installToolsWinget, onDownloadProgress, onToolInstallProgress,
   prepareTools, startDownload, type DownloadProgress, type DownloaderTools,
@@ -48,6 +48,9 @@ export default function Downloader() {
     }
   }, [folder, globalMutate])
 
+  const addToLibraryRef = useRef(addToLibrary)
+  useEffect(() => { addToLibraryRef.current = addToLibrary }, [addToLibrary])
+
   useEffect(() => {
     if (!isDesktop) return
     let disposed = false
@@ -58,13 +61,14 @@ export default function Downloader() {
 
     void onDownloadProgress((update) => {
       if (disposed) return
+      debugLog('downloader', 'progress_event', { index: update.index, phase: update.phase, percent: update.percent })
       setProgress((current) => ({ ...current, [update.index]: update }))
       if (update.phase === 'complete') {
         completedRef.current.add(update.index)
         if (completedRef.current.size >= update.total) {
           setBusy(false)
           setNotice('Downloads finished. Adding them to your library…')
-          void addToLibrary()
+          void addToLibraryRef.current()
         }
       } else if (update.phase === 'failed') {
         setBusy(false)
@@ -82,7 +86,7 @@ export default function Downloader() {
     }).then((stop) => { if (disposed) stop(); else stops.push(stop) }).catch((listenError) => diagnosticError('downloader', 'install_listener_failed', listenError))
 
     return () => { disposed = true; stops.forEach((stop) => stop()) }
-  }, [isDesktop, addToLibrary])
+  }, [isDesktop])
 
   const pickFolder = useCallback(async () => {
     setError('')
@@ -252,7 +256,15 @@ export default function Downloader() {
             {orderedProgress.map((item) => (
               <div key={item.index} className="download-progress-row">
                 <span className={`download-phase phase-${item.phase}`}>{item.phase === 'complete' ? <Check size={14} /> : item.phase === 'failed' ? <AlertCircle size={14} /> : <LoaderCircle size={14} className="spin-icon" />}</span>
-                <span className="download-progress-copy"><strong>{item.total > 1 ? `Link ${item.index + 1} of ${item.total}` : 'Download'}</strong><small>{item.detail}</small></span>
+                <span className="download-progress-copy">
+                  <strong>{item.total > 1 ? `Link ${item.index + 1} of ${item.total}` : 'Download'}</strong>
+                  <small>{item.detail}</small>
+                  {item.percent !== null && item.phase !== 'failed' && item.phase !== 'cancelled' && (
+                    <span className="download-progress-track" aria-hidden="true">
+                      <span style={{ width: `${Math.max(0, Math.min(100, item.percent))}%` }} />
+                    </span>
+                  )}
+                </span>
               </div>
             ))}
           </div>}

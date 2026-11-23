@@ -182,7 +182,10 @@ Build/test results for the current run: `cargo test --manifest-path src-tauri/Ca
 - [x] Only YouTube HTTP(S) hosts are accepted; file URLs, other hosts and malformed input are rejected. Progress parser reads `0.0%`–`100.0%` and drops `Destination:` lines so no absolute path reaches diagnostics. Rust unit tests cover both rules.
 - [x] A real single-video download with the standard format produced a `mov,mp4` file with `h264` video and `aac` audio (verified with `ffprobe`). Whole playlist links use yt-dlp's `--yes-playlist` mode and one progress row per pasted link.
 - [x] The WinGet installer script was executed with both tool checkboxes: it upgraded FFmpeg to the latest package, treated WinGet's "already installed / no upgrade" code as success, and streamed each status line so the Downloader status card shows live progress.
-- [x] Private and unavailable links are mapped to fixed, safe messages ("private or sign-in-only", "video unavailable", "YouTube asked for a sign-in") instead of the generic failure text; raw tool output is never echoed. Rust unit tests cover the mapping and path redaction.
+- [x] Private and unavailable links are mapped to fixed, safe messages ("private or sign-in-only", "video unavailable", "YouTube asked for a sign-in") instead of the generic failure text; raw tool output is never echoed. Rust unit tests cover the mapping and path redaction. Unmapped errors are logged only as a safe keyword fingerprint.
+- [x] yt-dlp runs with stdin disconnected and a five-minute no-output watchdog, so a hidden interactive prompt can no longer leave the app stuck with "Downloading…" and no files.
+- [x] WinGet tool arguments use the camelCase name expected by Tauri (`installYtDlp`); the previous `installYtdlp` mismatch was reproduced from diagnostics and fixed.
+- [x] Progress listeners are attached once per Downloader view and each row renders a real percentage bar; UI events are recorded in diagnostics as safe index/phase/percent fields.
 - [ ] On a fresh install, tick HD, let FFmpeg install with WinGet, paste a public playlist link, choose a folder, then confirm every video appears in Recently added and plays with picture on the receiver. A private link must show the private-link explanation instead of a generic failure.
 
 ## Run notes

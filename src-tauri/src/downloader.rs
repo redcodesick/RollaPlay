@@ -14,7 +14,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -27,6 +27,7 @@ const INSTALL_EVENT: &str = "ffmpeg-install-progress";
 const SD_FORMAT: &str = "best[ext=mp4][acodec!=none][vcodec!=none]/18";
 const HD_FORMAT: &str = "bv*[vcodec^=avc]+ba[acodec^=mp4a]/b[ext=mp4]/b";
 const POLL_INTERVAL: Duration = Duration::from_millis(120);
+const STALL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const INSTALL_SCRIPT: &str = include_str!("../../scripts/install-downloader-tools.ps1");
 const WINGET_SCRIPT: &str = include_str!("../../scripts/install-downloader-tools-winget.ps1");
 
@@ -232,12 +233,12 @@ fn progress_line(line: &str, index: usize, total: usize) -> Option<DownloadProgr
 /// echoed back, so URLs, paths and tokens can never reach diagnostics.
 fn failure_hint(line: &str) -> Option<&'static str> {
     let lower = line.to_ascii_lowercase();
-    if lower.contains("private video") || lower.contains("private playlist") || lower.contains("video is private") || lower.contains("this video is private") {
+    if lower.contains("private") {
         Some("This link is private or sign-in-only. Use a public video or playlist; private links need a YouTube sign-in.")
-    } else if lower.contains("video unavailable") || lower.contains("has been removed") || lower.contains("is not available") {
+    } else if lower.contains("video unavailable") || lower.contains("has been removed") || lower.contains("is not available") || lower.contains("not found") {
         Some("This video is unavailable or has been removed.")
-    } else if lower.contains("sign in to confirm") || lower.contains("captcha") || lower.contains("bot") {
-        Some("YouTube asked for a sign-in. Use a public link or try again later.")
+    } else if lower.contains("sign in") || lower.contains("captcha") || lower.contains("bot") || lower.contains("age-restricted") || lower.contains("members") {
+        Some("YouTube asked for a sign-in or membership. Use a public link or try again later.")
     } else if lower.contains("unsupported url") || lower.contains("unable to extract") || lower.contains("no video formats") {
         Some("This link is not a supported YouTube video or playlist.")
     } else if lower.contains("yt-dlp") && (lower.contains("update") || lower.contains("outdated") || lower.contains("newer")) {
@@ -247,6 +248,33 @@ fn failure_hint(line: &str) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+fn log_unmapped_error(app: &AppHandle, line: &str) {
+    const KEYWORDS: [&str; 12] = [
+        "error", "private", "sign in", "bot", "captcha", "unavailable", "removed",
+        "403", "404", "ffmpeg", "unsupported", "timeout",
+    ];
+    let lower = line.to_ascii_lowercase();
+    let matched = KEYWORDS
+        .iter()
+        .filter(|keyword| lower.contains(**keyword))
+        .copied()
+        .collect::<Vec<_>>()
+        .join(",");
+    let _ = crate::wizard_diag_log(
+        app.clone(),
+        "downloader".to_string(),
+        "unmapped_tool_error".to_string(),
+        Some(format!("bytes={};keywords={}", line.len(), matched)),
+    );
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or_default()
 }
 
 fn emit(app: &AppHandle, index: usize, total: usize, phase: &'static str, detail: &str) {
@@ -294,7 +322,7 @@ fn build_command(tools: &DownloaderTools, directory: &Path, url: &str, hd: bool)
             .arg("--ffmpeg-location")
             .arg(tools.ffmpeg_path.clone().expect("FFmpeg checked before HD download"));
     }
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    command.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
     configure_command(&mut command);
     command
 }
@@ -318,6 +346,8 @@ fn run_downloads(
             return;
         }
         emit(&app, index, total, "starting", "Starting download");
+        let started_millis = now_millis();
+        let last_activity = Arc::new(AtomicU64::new(0));
         let mut child = match build_command(&tools, &directory, url, hd).spawn() {
             Ok(child) => child,
             Err(_) => {
@@ -328,8 +358,10 @@ fn run_downloads(
         if let Some(stdout) = child.stdout.take() {
             let progress_app = app.clone();
             let progress_cancel = Arc::clone(&cancel);
+            let activity = Arc::clone(&last_activity);
             std::thread::spawn(move || {
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    activity.store(now_millis(), Ordering::Relaxed);
                     if progress_cancel.load(Ordering::Relaxed) {
                         break;
                     }
@@ -343,14 +375,21 @@ fn run_downloads(
         // output can contain URLs or paths; only fixed hints are forwarded.
         let stderr_thread = child.stderr.take().map(|stderr| {
             let failure_hint_ref = Arc::clone(&failure);
+            let log_app = app.clone();
+            let activity = Arc::clone(&last_activity);
             std::thread::spawn(move || {
+                let mut logged_unmapped = false;
                 for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    activity.store(now_millis(), Ordering::Relaxed);
                     if let Some(hint) = failure_hint(&line) {
                         if let Ok(mut slot) = failure_hint_ref.lock() {
                             if slot.is_none() {
                                 *slot = Some(hint);
                             }
                         }
+                    } else if !logged_unmapped && line.to_ascii_lowercase().contains("error") {
+                        logged_unmapped = true;
+                        log_unmapped_error(&log_app, &line);
                     }
                 }
             })
@@ -365,6 +404,14 @@ fn run_downloads(
             }
             if let Some(status) = child.try_wait().ok().flatten() {
                 break status;
+            }
+            let last = last_activity.load(Ordering::Relaxed);
+            let reference = if last == 0 { started_millis } else { last };
+            if now_millis().saturating_sub(reference) > STALL_TIMEOUT.as_millis() as u64 {
+                let _ = child.kill();
+                let _ = child.wait();
+                emit(&app, index, total, "failed", "Download stalled with no output for five minutes. Try a public link or standard quality.");
+                return;
             }
             std::thread::sleep(POLL_INTERVAL);
         };
@@ -461,7 +508,7 @@ async fn run_tool_installer(
         for arg in args {
             command.arg(arg);
         }
-        command.stdout(Stdio::piped()).stderr(Stdio::null());
+        command.stdout(Stdio::piped()).stderr(Stdio::null()).stdin(Stdio::null());
         configure_command(&mut command);
         let mut child = command.spawn().map_err(|_| "Could not start the tool installer".to_string())?;
         let stdout_thread = child.stdout.take().map(|stdout| {
@@ -525,11 +572,11 @@ pub async fn prepare_tools(app: AppHandle, include_ffmpeg: bool) -> Result<Downl
 #[tauri::command]
 pub async fn install_tools_winget(
     app: AppHandle,
-    install_ytdlp: bool,
+    install_yt_dlp: bool,
     install_ffmpeg: bool,
 ) -> Result<DownloaderTools, String> {
     let mut args = Vec::new();
-    if install_ytdlp {
+    if install_yt_dlp {
         args.push(OsString::from("-InstallYtDlp"));
     }
     if install_ffmpeg {
@@ -547,7 +594,7 @@ pub async fn install_tools_winget(
     )
     .await?;
     let tools = locate_tools(&app);
-    if (install_ytdlp && !tools.yt_dlp_found) || (install_ffmpeg && !tools.hd_ready) {
+    if (install_yt_dlp && !tools.yt_dlp_found) || (install_ffmpeg && !tools.hd_ready) {
         return Err("WinGet finished but the tools were not found. Restart RollaPlay and try again.".to_string());
     }
     Ok(tools)

@@ -14,8 +14,12 @@ All notable changes to RollaPlay are documented here. The format follows [Keep a
 ### Fixed
 
 - WinGet output is streamed line by line instead of being buffered until the process exits.
-- A failed download no longer always shows the generic "check the link and update yt-dlp" text.
+- A failed download no longer always shows the generic "check the link and update yt-dlp" text; private, unavailable and sign-in cases are recognised from more yt-dlp phrasings.
 - WinGet's "already installed / no upgrade" exit code is treated as success.
+- Fixed the WinGet command argument name (`installYtDlp`) so the tool installer no longer rejects the request.
+- yt-dlp now receives no stdin, so it cannot hang forever on an interactive prompt in the hidden app process.
+- Downloads that produce no output for five minutes are stopped with a clear stall message instead of hanging silently.
+- Progress listeners stay attached when the destination folder changes, and each download row now has a real progress bar.
 
 ## [0.1.0] - 2026-11-23
 
