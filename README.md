@@ -68,4 +68,4 @@ RollaPlay is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) 
 
 ## Validation status
 
-On Windows the frontend build, Rust tests (77 passed, 1 ignored), and packaged NSIS/MSI builds have all been verified; recorded results are in [docs/windows-validation.md](docs/windows-validation.md). Receiver hardware checks are still outstanding: real Chrome launch, TV discovery, visible seek progress, and `IdleReason.FINISHED` playlist advancement must be exercised on a live Cast session using [docs/cast-testing.md](docs/cast-testing.md).
+On Windows the frontend build, Rust tests (77 passed, 1 ignored), and packaged NSIS/MSI builds have all been verified; recorded results are in [docs/windows-validation.md](docs/windows-validation.md). The user also validated the full Cast checklist on a real LAN Chromecast receiver — PC → TV playback, receiver controls, and `IdleReason.FINISHED` playlist progression all reported PASS on 2026-11-23; details are in [docs/cast-testing.md](docs/cast-testing.md). That hardware run was user-reported without per-item logs or screenshots.
