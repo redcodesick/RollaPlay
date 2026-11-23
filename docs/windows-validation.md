@@ -18,34 +18,36 @@ Phase 4 (Google Cast / Xiaomi Mi Box) has its own hardware checklist in [docs/ca
 
 ### Cross-platform Rust unit tests
 
-Run with Rust/Cargo and the native prerequisites for the selected Tauri target. These tests use temporary directories and SQLite; they do **not** exercise COM, actual Windows thumbnail providers, or a real Cast receiver. The command used for the Phase 5 build was `cargo test --manifest-path src-tauri/Cargo.toml`.
+Run with Rust/Cargo and the native prerequisites for the selected Tauri target. These tests use temporary directories and SQLite; they do **not** exercise COM, actual Windows thumbnail providers, or a real Cast receiver. The command used for the Phase 5 build was `cargo test --manifest-path src-tauri/Cargo.toml`; all checks in this section and the HTTP/network section below were executed and passed (77 passed, 0 failed, 1 ignored — the ignored test is the Windows Shell thumbnail test that needs `WMS_TEST_VIDEO`).
 
-- [ ] Cache filename path-traversal rejection and orphan/temp-file cleanup.
-- [ ] Legacy SQLite migration creates availability and thumbnail-cache metadata.
-- [ ] Repeated scans do not create duplicate media rows.
-- [ ] File size/modification changes preserve the media ID and invalidate its thumbnail metadata.
-- [ ] Unique rename detection preserves playlist-item references.
-- [ ] Pre-cancelled scans do not commit partial index changes.
-- [ ] Duplicate active scans for the same directory are rejected.
-- [ ] Missing-root handling marks entries temporarily unavailable and preserves playlists.
-- [ ] A completed scan marks confirmed deletions permanently missing without deleting playlist rows.
-- [ ] Removing a library folder marks it removed without deleting playlist rows.
-- [ ] Partial/inaccessible scans classify unobserved entries as temporary rather than permanently missing.
+- [x] Cache filename path-traversal rejection and orphan/temp-file cleanup.
+- [x] Legacy SQLite migration creates availability and thumbnail-cache metadata.
+- [x] Repeated scans do not create duplicate media rows.
+- [x] File size/modification changes preserve the media ID and invalidate its thumbnail metadata.
+- [x] Unique rename detection preserves playlist-item references.
+- [x] Pre-cancelled scans do not commit partial index changes.
+- [x] Duplicate active scans for the same directory are rejected.
+- [x] Missing-root handling marks entries temporarily unavailable and preserves playlists.
+- [x] A completed scan marks confirmed deletions permanently missing without deleting playlist rows.
+- [x] Removing a library folder marks it removed without deleting playlist rows.
+- [x] Partial/inaccessible scans classify unobserved entries as temporary rather than permanently missing.
 
 ### Cross-platform HTTP/network unit tests
 
 These are independent of the React UI and use an in-process Axum router, temporary files, SQLite, and a loopback `ConnectInfo` value. They run wherever the Rust/Tauri target prerequisites are installed.
 
-- [ ] Full GET and HEAD response headers/body.
-- [ ] Closed, single-byte, open-ended, and suffix byte ranges with 206 and exact Content-Range.
-- [ ] Invalid, out-of-bounds, and multiple-range requests return 416 with `bytes */size` (multi-range is intentionally unsupported).
-- [ ] Unauthorized requests, invalid media IDs, missing files, and paths outside the registered root are rejected.
-- [ ] MIME sniffing takes precedence when recognizable; extension fallback is marked in the response header.
-- [ ] Large body streaming, concurrent independent readers, and an interrupted body clean up active-stream diagnostics.
-- [ ] Loopback-only CORS preflight and no HTTP administrative routes.
-- [ ] Private IPv4 selection policy and port fallback when the configured port is occupied.
+- [x] Full GET and HEAD response headers/body.
+- [x] Closed, single-byte, open-ended, and suffix byte ranges with 206 and exact Content-Range.
+- [x] Invalid, out-of-bounds, and multiple-range requests return 416 with `bytes */size` (multi-range is intentionally unsupported).
+- [x] Unauthorized requests, invalid media IDs, missing files, and paths outside the registered root are rejected.
+- [x] MIME sniffing takes precedence when recognizable; extension fallback is marked in the response header.
+- [x] Large body streaming, concurrent independent readers, and an interrupted body clean up active-stream diagnostics.
+- [x] Loopback-only CORS preflight and no HTTP administrative routes.
+- [x] Private IPv4 selection policy and port fallback when the configured port is occupied.
 
 ### Windows-only checks
+
+These need real WindowsShell providers, removable media or manual UI steps. Where a packaged smoke already covered part of a check, it is recorded with a PASS bullet in the "First-run setup wizard" section below; the box stays open until the full manual procedure (including USB/network variations) is executed.
 
 - [ ] Build and launch the Tauri desktop app separately on Windows 10 and Windows 11.
 - [ ] Select a local folder and a removable USB folder using the native directory picker.
@@ -67,6 +69,8 @@ These are independent of the React UI and use an in-process Axum router, tempora
 - [ ] Restart the app after cancelling or forcibly closing during scan; verify database integrity and that a fresh scan can start.
 
 ### Phase 3 media server checks
+
+The equivalent Rust unit tests in the HTTP/network section above are already checked (ranges, auth, MIME, streaming, CORS, private-IP selection, port fallback). These boxes stay open until the behaviour is confirmed on the live listener, from a second LAN device and through the Windows firewall.
 
 - [ ] Confirm the default listener uses port 8765 and binds to the selected private LAN IPv4 only, not `0.0.0.0` or a public interface.
 - [ ] Test adapter selection with Wi-Fi, Ethernet, VPN/virtual, loopback, down, and multiple active adapters; confirm the default-route physical private interface wins.
@@ -109,7 +113,7 @@ Run with `cargo test --manifest-path src-tauri/Cargo.toml`. The `playlist::tests
 
 ### Required physical hardware validation (NOT run)
 
-Use the Xiaomi Mi Box, Chrome sender and same-LAN Windows machine from [docs/cast-testing.md](docs/cast-testing.md). Record the device firmware, Chrome version and exact media files.
+Use the Xiaomi Mi Box, Chrome sender and same-LAN Windows machine from [docs/cast-testing.md](docs/cast-testing.md). Record the device firmware, Chrome version and exact media files. These boxes remain open only for the **receiver-connected** variant: the non-hardware parts are already verified above — playlist create/rename/delete and media-file safety (PASS in the wizard section), queue reorder and Play next (PASS packaged UIA), and engine completion/mode/shuffle/repeat/restore rules (PASS Rust tests).
 
 - [ ] Create, rename and delete playlists; confirm the underlying video files remain on disk after deletion.
 - [ ] Add single and multiple selected videos, remove items, drag-reorder, and verify item counts and durations shown in the UI.
