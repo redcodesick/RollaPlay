@@ -87,6 +87,13 @@ export default function QueuePanel({
 
   return (
     <div className="queue-panel">
+      <PlaylistManager
+        snapshot={snapshot}
+        selectedMediaIds={selectedMediaIds}
+        onNotice={onNotice}
+        onSelectionConsumed={onSelectionConsumed}
+      />
+
       <section className="queue-section" aria-labelledby="queue-title">
         <div className="queue-section-head">
           <div><div className="section-eyebrow">PLAYBACK</div><h2 id="queue-title">Playback queue</h2><p>Order, mode and recovery are owned by the app — not the browser.</p></div>
@@ -124,7 +131,7 @@ export default function QueuePanel({
         </div>
 
         <div className="queue-list" role="list">
-          {!snapshot?.queue.length ? <div className="queue-empty"><ListMusic size={22} /><span>No videos in the queue. Select videos in the Media library or add a playlist below.</span></div> : snapshot.queue.map((entry, index) => {
+          {!snapshot?.queue.length ? <div className="queue-empty"><ListMusic size={22} /><span>No videos in the queue. Select videos in the Media library or add a playlist above.</span></div> : snapshot.queue.map((entry, index) => {
             const tone = entryTone(entry, snapshot)
             return (
               <div
@@ -157,13 +164,6 @@ export default function QueuePanel({
           })}
         </div>
       </section>
-
-      <PlaylistManager
-        snapshot={snapshot}
-        selectedMediaIds={selectedMediaIds}
-        onNotice={onNotice}
-        onSelectionConsumed={onSelectionConsumed}
-      />
 
       <section className="queue-section" aria-labelledby="history-title">
         <div className="queue-section-head"><div><div className="section-eyebrow">ACTIVITY</div><h2 id="history-title">Watch history</h2><p>Recorded from actual receiver playback.</p></div><button className="queue-ghost-button" onClick={() => void clearHistory()} disabled={busy || !snapshot?.history.length}><Trash2 size={15} /> Clear history</button></div>
