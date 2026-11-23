@@ -169,7 +169,7 @@ export default function MediaServerSettings() {
     <section className="media-server-settings" aria-labelledby="media-server-title">
       <div className="server-section-heading">
         <div>
-          <div className="section-eyebrow"><span className="eyebrow-line" /> PHASE 3 · LOCAL STREAMING</div>
+          <div className="section-eyebrow"><span className="eyebrow-line" /> LOCAL STREAMING</div>
           <h2 id="media-server-title">Media server</h2>
           <p>Serve registered original files to devices on your private LAN. No conversion or public listener.</p>
         </div>

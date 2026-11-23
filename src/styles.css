@@ -144,12 +144,17 @@
 .queue-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
 .queue-list{display:flex;flex-direction:column;gap:5px;max-height:360px;overflow:auto;padding-right:3px}
 .queue-item{display:flex;align-items:center;gap:8px;min-height:44px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#0f1015;color:#dcd8e5;font-size:10px}
-.queue-item.dragging,.playlist-item.dragging{opacity:.45}
+.queue-item.dragging,.playlist-item.dragging{opacity:.85;position:relative;z-index:3;border-color:#ff8c32;box-shadow:0 14px 30px rgba(0,0,0,.6);transition:none}
+.queue-item.drop-before{box-shadow:inset 0 2px 0 #ff8c32}
 .queue-item.tone-current{border-color:rgba(184,157,243,.45);background:linear-gradient(90deg,rgba(160,125,239,.14),rgba(160,125,239,.03))}
 .queue-item.tone-next{border-color:rgba(104,188,143,.25)}
 .queue-item.tone-unavailable{opacity:.6}
 .queue-item.tone-completed{opacity:.72}
-.queue-grip{color:#66636e;flex-shrink:0;cursor:grab}
+.queue-grip-button{width:20px;height:30px;display:grid;place-items:center;flex-shrink:0;padding:0;touch-action:none;cursor:grab}
+.queue-grip-button:active{cursor:grabbing}
+.queue-grip-button:disabled{cursor:not-allowed;opacity:.35}
+.queue-grip{color:#999;flex-shrink:0;pointer-events:none}
+.queue-grip-button:hover .queue-grip{color:#ff8c32}
 .queue-index{width:18px;flex-shrink:0;color:#8b8894;font-size:9px;text-align:right}
 .queue-item-copy{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px}
 .queue-item-copy strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}

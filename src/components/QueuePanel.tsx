@@ -1,7 +1,7 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   AlertCircle, ArrowDown, ArrowUp, Clock3, GripVertical,
-  ListMusic, LoaderCircle, Pause, Play, Plus, RefreshCw, Repeat, Repeat1,
+  ListMusic, ListPlus, LoaderCircle, Pause, Play, Plus, RefreshCw, Repeat, Repeat1,
   Shuffle, SkipBack, SkipForward, Trash2, X,
 } from 'lucide-react'
 import {
@@ -22,6 +22,14 @@ type Props = {
   onTogglePlay: () => void
   isPlaying: boolean
   onHistoryCleared?: () => void
+}
+
+type QueueDrag = {
+  entryId: string
+  pointerId: number
+  startY: number
+  deltaY: number
+  targetIndex: number
 }
 
 function friendlyError(error: unknown): string {
@@ -52,7 +60,9 @@ export default function QueuePanel({
 }: Props) {
   const available = isPlaylistAvailable()
   const [busy, setBusy] = useState(false)
-  const [dragEntry, setDragEntry] = useState<string | null>(null)
+  const [drag, setDrag] = useState<QueueDrag | null>(null)
+  const queueListRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef<QueueDrag | null>(null)
 
   const guard = useCallback(async (action: () => Promise<unknown>) => {
     setBusy(true)
@@ -83,6 +93,91 @@ export default function QueuePanel({
       onHistoryCleared?.()
       onNotice('Watch history cleared.', 'success')
     })
+  }
+
+  const queue = snapshot?.queue ?? []
+  const queueRef = useRef(queue)
+  queueRef.current = queue
+  const remainingQueue = drag ? queue.filter((entry) => entry.entry_id !== drag.entryId) : queue
+  const dropBeforeId = drag ? (remainingQueue[drag.targetIndex]?.entry_id ?? '') : ''
+
+  // Return the insertion position in the array *after* the dragged item is
+  // removed, which is exactly what `queueReorder` expects.
+  function targetIndexFor(clientY: number, entryId: string) {
+    const rows = Array.from(queueListRef.current?.querySelectorAll<HTMLDivElement>('[data-queue-entry]') ?? [])
+      .filter((row) => row.dataset.queueEntry !== entryId)
+    for (let index = 0; index < rows.length; index += 1) {
+      const rect = rows[index].getBoundingClientRect()
+      if (clientY < rect.top + rect.height / 2) return index
+    }
+    return rows.length
+  }
+
+  function beginDrag(event: ReactPointerEvent<HTMLButtonElement>, entryId: string, index: number) {
+    if (!available || busy) return
+    event.preventDefault()
+    event.stopPropagation()
+    const next = { entryId, pointerId: event.pointerId, startY: event.clientY, deltaY: 0, targetIndex: index }
+    dragRef.current = next
+    setDrag(next)
+  }
+
+  // Listen on the window instead of the grip button: element-level pointer
+  // capture is unreliable inside WebView2, and the mouse often leaves the
+  // small grip while dragging.
+  const dragging = drag !== null
+  useEffect(() => {
+    if (!dragging) return
+    const onMove = (event: PointerEvent) => {
+      const current = dragRef.current
+      if (!current || (event.pointerType === 'mouse' && event.buttons === 0)) return
+      const targetIndex = targetIndexFor(event.clientY, current.entryId)
+      const deltaY = event.clientY - current.startY
+      if (targetIndex === current.targetIndex && deltaY === current.deltaY) return
+      const next = { ...current, targetIndex, deltaY }
+      dragRef.current = next
+      setDrag(next)
+    }
+    const finish = (commit: boolean) => {
+      const current = dragRef.current
+      dragRef.current = null
+      setDrag(null)
+      if (!commit || !current) return
+      const from = queueRef.current.findIndex((entry) => entry.entry_id === current.entryId)
+      if (from >= 0 && from !== current.targetIndex) {
+        void guard(() => queueReorder(current.entryId, current.targetIndex))
+      }
+    }
+    const onUp = () => finish(true)
+    const onCancel = () => finish(false)
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onCancel)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onCancel)
+    }
+  }, [dragging, guard])
+
+  function playNextInQueue(entryId: string) {
+    const from = queue.findIndex((entry) => entry.entry_id === entryId)
+    if (from < 0) return
+    if (entryId === snapshot?.current_entry_id) {
+      onNotice('This video is playing now.', 'info')
+      return
+    }
+    const currentIndex = queue.findIndex((entry) => entry.entry_id === snapshot?.current_entry_id)
+    // `queueReorder` inserts after removing the item, so account for the index
+    // shift when the moving item started above the current one.
+    const target = currentIndex < 0
+      ? 0
+      : Math.max(0, Math.min(queue.length - 1, (currentIndex > from ? currentIndex - 1 : currentIndex) + 1))
+    if (from === target) {
+      onNotice('This video is already next.', 'info')
+      return
+    }
+    void guard(() => queueReorder(entryId, target))
   }
 
   return (
@@ -130,31 +225,34 @@ export default function QueuePanel({
           <button className="queue-ghost-button" onClick={() => void addToQueue('append')} disabled={busy || !selectedMediaIds.length || !available}><Plus size={15} /> Add to queue</button>
         </div>
 
-        <div className="queue-list" role="list">
+        <div className="queue-list" role="list" ref={queueListRef}>
           {!snapshot?.queue.length ? <div className="queue-empty"><ListMusic size={22} /><span>No videos in the queue. Select videos in the Media library or add a playlist above.</span></div> : snapshot.queue.map((entry, index) => {
             const tone = entryTone(entry, snapshot)
+            const isDragging = drag?.entryId === entry.entry_id
+            const isDropTarget = !!drag && !isDragging && dropBeforeId === entry.entry_id
+            const isCurrent = entry.entry_id === snapshot.current_entry_id
             return (
               <div
                 key={entry.entry_id}
-                className={`queue-item tone-${tone} ${dragEntry === entry.entry_id ? 'dragging' : ''}`}
+                data-queue-entry={entry.entry_id}
+                className={`queue-item tone-${tone}${isDragging ? ' dragging' : ''}${isDropTarget ? ' drop-before' : ''}`}
                 role="listitem"
-                draggable
-                onDragStart={() => setDragEntry(entry.entry_id)}
-                onDragEnd={() => setDragEntry(null)}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => {
-                  event.preventDefault()
-                  const from = dragEntry
-                  setDragEntry(null)
-                  if (from && from !== entry.entry_id) void guard(async () => queueReorder(from, index))
-                }}
+                style={isDragging && drag ? { transform: `translateY(${drag.deltaY}px)` } : undefined}
               >
-                <GripVertical size={16} className="queue-grip" aria-hidden="true" />
+                <button
+                  type="button"
+                  className="queue-grip-button"
+                  onPointerDown={(event) => beginDrag(event, entry.entry_id, index)}
+                  disabled={busy || !available}
+                  title="Drag to reorder"
+                  aria-label={`Drag ${entry.filename} to reorder`}
+                ><GripVertical size={16} className="queue-grip" aria-hidden="true" /></button>
                 <span className="queue-index">{index + 1}</span>
                 <div className="queue-item-copy"><strong title={entry.filename}>{entry.filename}</strong><span>{formatDuration(entry.duration_seconds)}</span></div>
                 <span className={`queue-badge badge-${tone}`}>{entryLabel(tone)}</span>
                 <div className="queue-item-actions">
                   <button onClick={() => void guard(async () => playNow(entry.entry_id))} disabled={busy || !available} title="Play now" aria-label={`Play ${entry.filename} now`}><Play size={14} /></button>
+                  <button onClick={() => playNextInQueue(entry.entry_id)} disabled={busy || !available || isCurrent} title="Play next in queue" aria-label={`Play ${entry.filename} next in queue`}><ListPlus size={14} /></button>
                   <button onClick={() => void guard(async () => queueReorder(entry.entry_id, Math.max(0, index - 1)))} disabled={busy || index === 0} title="Move up" aria-label="Move up"><ArrowUp size={14} /></button>
                   <button onClick={() => void guard(async () => queueReorder(entry.entry_id, index + 1))} disabled={busy || index === snapshot.queue.length - 1} title="Move down" aria-label="Move down"><ArrowDown size={14} /></button>
                   <button onClick={() => void guard(async () => queueRemove(entry.entry_id))} disabled={busy} title="Remove from queue" aria-label={`Remove ${entry.filename} from queue`}><X size={14} /></button>

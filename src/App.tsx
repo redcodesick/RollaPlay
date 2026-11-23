@@ -229,7 +229,8 @@ function SetupDialog({
   )
 }
 
-function SettingsView({ onManage }: { onManage: () => void }) {
+function SettingsView({ onManage, onPlayback }: { onManage: () => void; onPlayback: () => void }) {
+  const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   return (
     <section className="settings-view">
       <div className="section-eyebrow">PREFERENCES</div>
@@ -244,22 +245,22 @@ function SettingsView({ onManage }: { onManage: () => void }) {
         <article className="settings-card">
           <div className="settings-card-icon"><Wifi size={19} /></div>
           <div><h3>Local network</h3><p>LAN streaming and connectivity diagnostics.</p></div>
-          <span className="not-configured">PHASE 3</span>
+          <button className="settings-action" onClick={() => scrollTo('settings-network')}>Open <span>→</span></button>
         </article>
         <article className="settings-card">
           <div className="settings-card-icon"><Cast size={19} /></div>
           <div><h3>Cast connection</h3><p>Official Google Cast sender via Google Chrome.</p></div>
-          <span className="not-configured">PHASE 4</span>
+          <button className="settings-action" onClick={() => scrollTo('settings-cast')}>Open <span>→</span></button>
         </article>
         <article className="settings-card">
           <div className="settings-card-icon"><Gauge size={19} /></div>
           <div><h3>Playback behavior</h3><p>Autoplay, repeat, and shuffle preferences.</p></div>
-          <span className="not-configured">DEFAULTS</span>
+          <button className="settings-action" onClick={onPlayback}>Configure <span>→</span></button>
         </article>
       </div>
       <div className="privacy-banner"><ShieldCheck size={19} /><div><strong>Your privacy matters</strong><p>Media metadata and playlists are stored locally on this PC. No cloud account required.</p></div></div>
-      <MediaServerSettings />
-      <CastPanel />
+      <div id="settings-network"><MediaServerSettings /></div>
+      <div id="settings-cast"><CastPanel /></div>
     </section>
   )
 }
@@ -550,7 +551,7 @@ function App() {
             </div>
           </div>
         </header>
-        {active === 'Settings' ? <SettingsView onManage={browse} /> : active === 'Library' ? <MediaLibrary searchQuery={query} selectedMediaIds={selectedMediaIds} onSelectionChange={setSelectedMediaIds} /> : active === 'Playlists' ? <section className="section-page queue-page"><div className="section-eyebrow">YOUR COLLECTION</div><h1>Playlists &amp; queue</h1><p>Saved playlists first, then the active playback queue and receiver-driven playback controls.</p><QueuePanel snapshot={phase5Snapshot ?? null} castConnected={castConnected} selectedMediaIds={selectedMediaIds} onNotice={showNotice} onSelectionConsumed={() => setSelectedMediaIds([])} onTogglePlay={toggleCastPlay} isPlaying={castState === 'PLAYING'} onHistoryCleared={() => void mutatePhase5()} /></section> : active === 'History' || active === 'Recently added' ? <section className="section-page"><div className="section-eyebrow">YOUR COLLECTION</div><h1>{pageTitle}</h1><p>{active === 'History' ? 'Your playback history appears in the Playlists & queue panel.' : 'New additions to your library will appear here.'}</p><EmptyLibrary onSetup={openSetup} onBrowse={browse} /></section> : <>
+        {active === 'Settings' ? <SettingsView onManage={browse} onPlayback={() => setActive('Playlists')} /> : active === 'Library' ? <MediaLibrary searchQuery={query} selectedMediaIds={selectedMediaIds} onSelectionChange={setSelectedMediaIds} /> : active === 'Playlists' ? <section className="section-page queue-page"><div className="section-eyebrow">YOUR COLLECTION</div><h1>Playlists &amp; queue</h1><p>Saved playlists first, then the active playback queue and receiver-driven playback controls.</p><QueuePanel snapshot={phase5Snapshot ?? null} castConnected={castConnected} selectedMediaIds={selectedMediaIds} onNotice={showNotice} onSelectionConsumed={() => setSelectedMediaIds([])} onTogglePlay={toggleCastPlay} isPlaying={castState === 'PLAYING'} onHistoryCleared={() => void mutatePhase5()} /></section> : active === 'History' || active === 'Recently added' ? <section className="section-page"><div className="section-eyebrow">YOUR COLLECTION</div><h1>{pageTitle}</h1><p>{active === 'History' ? 'Your playback history appears in the Playlists & queue panel.' : 'New additions to your library will appear here.'}</p><EmptyLibrary onSetup={openSetup} onBrowse={browse} /></section> : <>
           <section className="welcome-row"><div><div className="section-eyebrow"><span className="eyebrow-line" /> YOUR PERSONAL MEDIA SPACE</div><h1>Good evening<span className="title-period">.</span></h1><p>Your movies, your space. All stored locally.</p></div><button className="quick-add" onClick={browse}><Plus size={17} /> Add media</button></section>
           <section className="featured-card"><img src="/media/featured-still.png" alt="Cinematic scene of a figure in a rain-lit city at night" /><div className="feature-overlay" /><div className="feature-content"><div className="feature-tag"><span /> MADE FOR YOUR LIVING ROOM</div><h2>Your library.<br /><em>Your rules.</em></h2><p>Bring your local video collection together and stream directly to your TV. No subscriptions. No uploads. Just your media.</p><button className="feature-button" onClick={browse}><FolderPlus size={17} /> Add your first folder <span>→</span></button></div><div className="feature-side-note"><span>01</span><i /> PRIVATE BY DESIGN</div><div className="feature-pagination"><span className="selected" /><span /><span /></div></section>
           <div className="library-summary"><div className="summary-title"><div><div className="section-eyebrow">YOUR COLLECTION</div><h2>Recently added</h2></div><button className="text-link" onClick={() => setActive('Library')}>View library <span>→</span></button></div>

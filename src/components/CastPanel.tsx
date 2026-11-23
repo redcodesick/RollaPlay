@@ -174,7 +174,7 @@ export default function CastPanel() {
     <section className="cast-panel" aria-labelledby="cast-panel-title">
       <div className="cast-section-heading">
         <div>
-          <div className="section-eyebrow"><span className="eyebrow-line" /> PHASE 4 · GOOGLE CAST</div>
+          <div className="section-eyebrow"><span className="eyebrow-line" /> GOOGLE CAST</div>
           <h2 id="cast-panel-title">Cast connection</h2>
           <p>Stream registered videos to a Cast receiver on your home network. Use Connect to browse devices discovered on the LAN.</p>
         </div>
