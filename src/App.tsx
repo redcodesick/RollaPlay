@@ -269,6 +269,7 @@ function App() {
   const [query, setQuery] = useState('')
   const [setupOpen, setSetupOpen] = useState(false)
   const [setupStep, setSetupStep] = useState(0)
+  const [setupDone, setSetupDone] = useState(() => localStorage.getItem('wms.setup.completed') === '1')
   const [selectedMediaIds, setSelectedMediaIds] = useState<number[]>([])
   const [notice, setNotice] = useState<{ message: string; level: Phase5Notification['level'] } | null>(null)
   const [connectOpen, setConnectOpen] = useState(false)
@@ -294,6 +295,11 @@ function App() {
   )
   const showNotice = useCallback<Notice>((message, level = 'info') => {
     setNotice({ message, level })
+  }, [])
+  const completeSetup = useCallback(() => {
+    localStorage.setItem('wms.setup.completed', '1')
+    setSetupDone(true)
+    debugLog('wizard', 'setup_completed')
   }, [])
   useEffect(() => {
     if (!isDesktopApp()) return
@@ -382,7 +388,45 @@ function App() {
   const castHasMedia = castTitle !== null && castPlayback?.media_file_id != null
   const castPosition = castPlayback?.position_seconds ?? 0
   const castDuration = castPlayback?.duration_seconds ?? 0
-  const progressPercent = castDuration > 0 ? Math.min(100, Math.max(0, (castPosition / castDuration) * 100)) : 0
+  // Smooth the receiver's polled position between updates so the bar walks
+  // while playing. This is display-only: playlist advancement still waits for
+  // a real IdleReason.FINISHED event from the receiver.
+  const [progressNow, setProgressNow] = useState(castPosition)
+  const [seekPreview, setSeekPreview] = useState<number | null>(null)
+  const progressAnchor = useRef({
+    position: castPosition,
+    duration: castDuration,
+    at: Date.now(),
+    state: castState,
+  })
+  useEffect(() => {
+    progressAnchor.current = {
+      position: castPosition,
+      duration: castDuration,
+      at: castPlayback?.updated_at_epoch_ms ?? Date.now(),
+      state: castState,
+    }
+    setProgressNow(castPosition)
+  }, [castPosition, castDuration, castState, castPlayback?.updated_at_epoch_ms])
+  useEffect(() => {
+    if (castState !== 'PLAYING' || castDuration <= 0) return
+    const timer = window.setInterval(() => {
+      const anchor = progressAnchor.current
+      const elapsed = Math.max(0, Date.now() - anchor.at) / 1000
+      setProgressNow(Math.min(anchor.duration, anchor.position + elapsed))
+    }, 250)
+    return () => window.clearInterval(timer)
+  }, [castState, castDuration])
+  const displayedPosition = seekPreview ?? progressNow
+  const progressPercent = castDuration > 0 ? Math.min(100, Math.max(0, (displayedPosition / castDuration) * 100)) : 0
+  const commitSeek = () => {
+    if (seekPreview === null) return
+    const target = Math.max(0, Math.min(seekPreview, castDuration || 0))
+    progressAnchor.current = { position: target, duration: castDuration, at: Date.now(), state: castState }
+    setProgressNow(target)
+    setSeekPreview(null)
+    void castSendControl('seek', { positionSeconds: target }).catch((error) => showNotice(String(error), 'error'))
+  }
   useEffect(() => {
     if (playingOverride !== null && castState && (castState === 'PLAYING') === playingOverride) {
       setPlayingOverride(null)
@@ -509,8 +553,6 @@ function App() {
         {active === 'Settings' ? <SettingsView onManage={browse} /> : active === 'Library' ? <MediaLibrary searchQuery={query} selectedMediaIds={selectedMediaIds} onSelectionChange={setSelectedMediaIds} /> : active === 'Playlists' ? <section className="section-page queue-page"><div className="section-eyebrow">YOUR COLLECTION</div><h1>Playlists &amp; queue</h1><p>Saved playlists, the active playback queue and receiver-driven playback controls.</p><QueuePanel snapshot={phase5Snapshot ?? null} castConnected={castConnected} selectedMediaIds={selectedMediaIds} onNotice={showNotice} onSelectionConsumed={() => setSelectedMediaIds([])} onTogglePlay={toggleCastPlay} isPlaying={castState === 'PLAYING'} onHistoryCleared={() => void mutatePhase5()} /></section> : active === 'History' || active === 'Recently added' ? <section className="section-page"><div className="section-eyebrow">YOUR COLLECTION</div><h1>{pageTitle}</h1><p>{active === 'History' ? 'Your playback history appears in the Playlists & queue panel.' : 'New additions to your library will appear here.'}</p><EmptyLibrary onSetup={openSetup} onBrowse={browse} /></section> : <>
           <section className="welcome-row"><div><div className="section-eyebrow"><span className="eyebrow-line" /> YOUR PERSONAL MEDIA SPACE</div><h1>Good evening<span className="title-period">.</span></h1><p>Your movies, your space. All stored locally.</p></div><button className="quick-add" onClick={browse}><Plus size={17} /> Add media</button></section>
           <section className="featured-card"><img src="/media/featured-still.png" alt="Cinematic scene of a figure in a rain-lit city at night" /><div className="feature-overlay" /><div className="feature-content"><div className="feature-tag"><span /> MADE FOR YOUR LIVING ROOM</div><h2>Your library.<br /><em>Your rules.</em></h2><p>Bring your local video collection together and stream directly to your TV. No subscriptions. No uploads. Just your media.</p><button className="feature-button" onClick={browse}><FolderPlus size={17} /> Add your first folder <span>→</span></button></div><div className="feature-side-note"><span>01</span><i /> PRIVATE BY DESIGN</div><div className="feature-pagination"><span className="selected" /><span /><span /></div></section>
-          <div className="content-heading"><div><div className="section-eyebrow">START HERE</div><h2>Make it yours</h2></div><button className="text-link" onClick={openSetup}>Setup guide <span>→</span></button></div>
-          <div className="quick-cards"><button className="quick-card" onClick={browse}><span className="quick-card-icon purple"><FolderPlus size={19} /></span><span className="quick-card-copy"><strong>Add your folders</strong><small>Build your local library</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={() => void openConnect()}><span className="quick-card-icon blue"><Cast size={19} /></span><span className="quick-card-copy"><strong>Connect your TV</strong><small>{castDevice ? `Casting to ${castDevice}` : 'Choose a device'}</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={openNetworkSetup}><span className="quick-card-icon amber"><HardDrive size={19} /></span><span className="quick-card-copy"><strong>Check your setup</strong><small>Network and preferences</small></span><span className="card-arrow">↗</span></button></div>
           <div className="library-summary"><div className="summary-title"><div><div className="section-eyebrow">YOUR COLLECTION</div><h2>Recently added</h2></div><button className="text-link" onClick={() => setActive('Library')}>View library <span>→</span></button></div>
              {recentFiles && recentFiles.length > 0 ? <div className="recent-grid">
                {recentFiles.slice(0, 6).map((media) => <button
@@ -527,11 +569,15 @@ function App() {
                </button>)}
              </div> : <EmptyLibrary onSetup={openSetup} onBrowse={browse} />}
            </div>
+          {!setupDone && <>
+            <div className="content-heading first-steps-heading"><div><div className="section-eyebrow">START HERE</div><h2>Make it yours</h2></div><button className="text-link" onClick={openSetup}>Setup guide <span>→</span></button></div>
+            <div className="quick-cards"><button className="quick-card" onClick={browse}><span className="quick-card-icon purple"><FolderPlus size={19} /></span><span className="quick-card-copy"><strong>Add your folders</strong><small>Build your local library</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={() => void openConnect()}><span className="quick-card-icon blue"><Cast size={19} /></span><span className="quick-card-copy"><strong>Connect your TV</strong><small>{castDevice ? `Casting to ${castDevice}` : 'Choose a device'}</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={openNetworkSetup}><span className="quick-card-icon amber"><HardDrive size={19} /></span><span className="quick-card-copy"><strong>Check your setup</strong><small>Network and preferences</small></span><span className="card-arrow">↗</span></button></div>
+          </>}
         </>}
         <footer className="app-footer"><span>ROLLAPLAY <b>•</b> LOCAL MEDIA. LOUD ATTITUDE.</span><span><ShieldCheck size={13} /> LOCAL FIRST</span></footer>
       </main>
       {notice && <div className={`phase5-toast toast-${notice.level}`} role="status"><Check size={15} /><span>{notice.message}</span><button onClick={() => setNotice(null)} aria-label="Dismiss notification"><X size={14} /></button></div>}
-      <div className="player-bar"><div className="player-track"><div className={`player-art ${castConnected && castHasMedia ? 'casting' : ''}`}><Cast size={17} /></div><div className="player-meta"><strong>{castTitle ?? 'Nothing is playing'}</strong><span>{castConnected && castHasMedia ? `${playerStateLabel(castState)} on ${castDevice}` : 'Pick a video and cast it to your TV'}</span></div></div><div className="player-controls"><button disabled={!playlistReady || !phase5Snapshot?.current_entry_id} onClick={queuePrevious} aria-label="Previous video" title={phase5Snapshot ? `Previous · restarts after ${phase5Snapshot.previous_restart_threshold_seconds}s; with Shuffle follows history` : 'Previous'}><SkipBack size={17} /></button><button className="player-play" disabled={!castReady || !castConnected || !castHasMedia} onClick={toggleCastPlay} aria-label={isPlaying ? 'Pause' : 'Play'}>{isPlaying ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}</button><button disabled={!playlistReady || !phase5Snapshot?.current_entry_id} onClick={queueNext} aria-label="Next video" title="Next video"><SkipForward size={17} /></button></div><div className="player-progress"><span>{formatSeconds(castPosition)}</span><div className="progress-track"><i style={{ width: `${progressPercent}%` }} /></div><span>{formatSeconds(castDuration)}</span></div><div className="player-device"><Cast size={17} className={castConnected ? 'casting' : ''} /><span>{castDevice ?? 'No Cast device'}</span><div className="player-volume"><button
+      <div className="player-bar"><div className="player-track"><div className={`player-art ${castConnected && castHasMedia ? 'casting' : ''}`}><Cast size={17} /></div><div className="player-meta"><strong>{castTitle ?? 'Nothing is playing'}</strong><span>{castConnected && castHasMedia ? `${playerStateLabel(castState)} on ${castDevice}` : 'Pick a video and cast it to your TV'}</span></div></div><div className="player-controls"><button disabled={!playlistReady || !phase5Snapshot?.current_entry_id} onClick={queuePrevious} aria-label="Previous video" title={phase5Snapshot ? `Previous · restarts after ${phase5Snapshot.previous_restart_threshold_seconds}s; with Shuffle follows history` : 'Previous'}><SkipBack size={17} /></button><button className="player-play" disabled={!castReady || !castConnected || !castHasMedia} onClick={toggleCastPlay} aria-label={isPlaying ? 'Pause' : 'Play'}>{isPlaying ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}</button><button disabled={!playlistReady || !phase5Snapshot?.current_entry_id} onClick={queueNext} aria-label="Next video" title="Next video"><SkipForward size={17} /></button></div><div className="player-progress"><span>{formatSeconds(displayedPosition)}</span><div className="progress-track"><i style={{ width: `${progressPercent}%` }} /><b className="seek-thumb" style={{ left: `${progressPercent}%` }} /><input className="seek-range" type="range" min={0} max={Math.max(1, Math.ceil(castDuration))} step={1} aria-label="Seek playback" disabled={!castReady || !castConnected || !castHasMedia || castDuration <= 0} value={Math.round(Math.min(displayedPosition, castDuration || 0))} onChange={(event) => setSeekPreview(Number(event.target.value))} onPointerUp={commitSeek} onKeyUp={commitSeek} onBlur={commitSeek} /></div><span>{formatSeconds(castDuration)}</span></div><div className="player-device"><Cast size={17} className={castConnected ? 'casting' : ''} /><span>{castDevice ?? 'No Cast device'}</span><div className="player-volume"><button
   aria-label={castPlayback?.muted ? 'Unmute' : 'Mute'}
   disabled={!castReady || !castConnected}
   onClick={() => void castSendControl('set_mute', { muted: !castPlayback?.muted }).catch((error) => showNotice(String(error), 'error'))}
@@ -551,8 +597,7 @@ function App() {
         setStep={setSetupStep}
         onClose={() => setSetupOpen(false)}
         onOpenLibrary={() => {
-          localStorage.setItem('wms.setup.completed', '1')
-          debugLog('wizard', 'setup_completed')
+          completeSetup()
           setActive('Library')
           setSetupOpen(false)
         }}

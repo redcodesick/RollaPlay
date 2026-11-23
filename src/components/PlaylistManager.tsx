@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { useSWRConfig } from 'swr'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import useSWR, { useSWRConfig } from 'swr'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import {
-  AlertCircle, Check, ChevronRight, Download, GripVertical, ListMusic, LoaderCircle, Play, Plus,
-  RefreshCw, SkipForward, Trash2, Upload, X,
+  AlertCircle, Check, Clock3, Disc3, Download, GripVertical, LoaderCircle,
+  MoreHorizontal, Music2, Play, Plus, RefreshCw, SkipForward, Trash2, Upload, X,
 } from 'lucide-react'
 import {
   addPlaylistItems, createPlaylist, deletePlaylist, exportPlaylistFile, formatDuration,
@@ -12,6 +13,13 @@ import {
   type PlaylistItem, type PlaylistSummary,
 } from '../playlist'
 import { debugLog, friendlyError } from '../diagnostics'
+import { getMediaFiles } from '../media'
+
+const coverTones = ['red', 'amber', 'paper', 'steel']
+
+function coverTone(id: number) {
+  return coverTones[id % coverTones.length]
+}
 
 type Props = {
   snapshot: PlaybackSnapshot | null
@@ -78,6 +86,38 @@ export default function PlaylistManager({
     })
     return () => { active = false }
   }, [available, selectedPlaylist, onNotice])
+
+  // Cover art is built from thumbnails of indexed videos already in a playlist.
+  // It is purely decorative; a failed thumbnail lookup never blocks playlist UI.
+  const { data: coverFiles } = useSWR(
+    available && !compact ? ['playlist-covers', '', '', 'date'] as const : null,
+    getMediaFiles,
+    { refreshInterval: 60000 },
+  )
+  const thumbnailByMediaId = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const file of coverFiles ?? []) {
+      if (file.thumbnail_status === 'ready' && file.thumbnail_path) map.set(file.id, file.thumbnail_path)
+    }
+    return map
+  }, [coverFiles])
+  const [covers, setCovers] = useState<Record<number, string | null>>({})
+
+  useEffect(() => {
+    if (!available || compact || !playlists.length || !thumbnailByMediaId.size) return
+    let active = true
+    void Promise.all(playlists.map(async (playlist) => {
+      const firstWithArt = (await listPlaylistItems(playlist.id))
+        .find((item) => thumbnailByMediaId.has(item.media_file_id))
+      const thumbnail = firstWithArt ? thumbnailByMediaId.get(firstWithArt.media_file_id) : null
+      return [playlist.id, thumbnail ? convertFileSrc(thumbnail) : null] as const
+    })).then((entries) => {
+      if (active) setCovers(Object.fromEntries(entries))
+    }).catch(() => {
+      // Missing or unreadable thumbnails fall back to the gradient cover.
+    })
+    return () => { active = false }
+  }, [available, compact, playlists, thumbnailByMediaId])
 
   const guard = useCallback(async (action: () => Promise<unknown>) => {
     setBusy(true)
@@ -162,6 +202,57 @@ export default function PlaylistManager({
     })
   }
 
+  function playlistCard(playlist: PlaylistSummary, featured = false) {
+    const selected = selectedPlaylist === playlist.id
+    const cover = covers[playlist.id]
+    return (
+      <article key={playlist.id} className={`playlist-card ${featured ? 'playlist-card-featured' : ''} ${selected ? 'selected' : ''}`}>
+        <div className={`playlist-cover tone-${coverTone(playlist.id)}`}>
+          {cover ? <img src={cover} alt="" /> : <Disc3 size={featured ? 38 : 26} strokeWidth={1.4} />}
+          <button
+            className="playlist-cover-play"
+            onClick={() => playWholePlaylist(playlist)}
+            disabled={busy || !playlist.item_count || !available}
+            title="Play whole playlist"
+            aria-label={`Play ${playlist.name}`}
+          ><Play size={featured ? 20 : 15} fill="currentColor" /></button>
+        </div>
+        <button className="playlist-open" onClick={() => openPlaylist(playlist)}>
+          <span><strong>{playlist.name}</strong><small>{playlist.item_count} items · {formatDuration(playlist.duration_seconds)}</small></span>
+        </button>
+        <div className="playlist-card-actions">
+          <span className="playlist-card-type"><Music2 size={11} /> PLAYLIST</span>
+          <button onClick={() => { setRenaming(playlist.id); setRenameValue(playlist.name) }} disabled={busy} title="Rename" aria-label={`Rename ${playlist.name}`}><RefreshCw size={13} /></button>
+          <button onClick={() => void guard(async () => {
+            await queueAddPlaylist(playlist.id, 'append')
+            onNotice(`“${playlist.name}” added to the queue.`, 'success')
+          })} disabled={busy} title="Add playlist to queue" aria-label={`Add ${playlist.name} to queue`}><Plus size={13} /></button>
+          <button onClick={() => {
+            debugLog('playlists', 'button_click', { control: 'delete_playlist', playlistId: playlist.id })
+            void guard(async () => {
+              await deletePlaylist(playlist.id)
+              if (selectedPlaylist === playlist.id) {
+                preferredRefreshRef.current = null
+                setSelectedPlaylist(null)
+              }
+              onNotice(`Playlist “${playlist.name}” deleted. Your files were not changed.`, 'info')
+            })
+          }} disabled={busy} title="Delete playlist" aria-label={`Delete ${playlist.name}`}><Trash2 size={13} /></button>
+        </div>
+        {renaming === playlist.id && <form className="playlist-rename" onSubmit={(event) => {
+          event.preventDefault()
+          const name = renameValue.trim()
+          if (!name) return
+          void guard(async () => {
+            await renamePlaylist(playlist.id, name)
+            setRenaming(null)
+            onNotice('Playlist renamed.', 'success')
+          })
+        }}><input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} maxLength={120} autoFocus /><button type="submit" aria-label="Save name"><Check size={14} /></button><button type="button" onClick={() => setRenaming(null)} aria-label="Cancel rename"><X size={14} /></button></form>}
+      </article>
+    )
+  }
+
   return (
     <section className={`queue-section playlist-manager ${compact ? 'playlist-manager-compact' : ''}`} aria-labelledby={titleId}>
       <div className="queue-section-head">
@@ -218,94 +309,69 @@ export default function PlaylistManager({
         ><Upload size={15} /> Import M3U/WPL</button>
       </form>
 
+      <div className="playlist-shelf-label"><span>{compact ? 'YOUR PLAYLISTS' : 'PICK UP WHERE YOU LEFT OFF'}</span>{!compact && playlists.length > 0 && <small>{playlists.length} saved</small>}</div>
       <div className="playlist-grid">
-        {playlists.map((playlist) => (
-          <article key={playlist.id} className={`playlist-card ${selectedPlaylist === playlist.id ? 'selected' : ''}`}>
-            <button className="playlist-open" onClick={() => openPlaylist(playlist)}>
-              <ListMusic size={17} />
-              <span><strong>{playlist.name}</strong><small>{playlist.item_count} items · {formatDuration(playlist.duration_seconds)}</small></span>
-              <ChevronRight size={16} />
-            </button>
-            <div className="playlist-card-actions">
-              <button className="playlist-play" onClick={() => playWholePlaylist(playlist)} disabled={busy || !playlist.item_count || !available} title="Play whole playlist" aria-label={`Play ${playlist.name}`}><Play size={14} fill="currentColor" /></button>
-              <button onClick={() => { setRenaming(playlist.id); setRenameValue(playlist.name) }} disabled={busy} title="Rename" aria-label={`Rename ${playlist.name}`}><RefreshCw size={14} /></button>
-              <button onClick={() => void guard(async () => {
-                await queueAddPlaylist(playlist.id, 'append')
-                onNotice(`“${playlist.name}” added to the queue.`, 'success')
-              })} disabled={busy} title="Add playlist to queue" aria-label={`Add ${playlist.name} to queue`}><Plus size={14} /></button>
-              <button onClick={() => {
-                debugLog('playlists', 'button_click', { control: 'delete_playlist', playlistId: playlist.id })
-                void guard(async () => {
-                  await deletePlaylist(playlist.id)
-                  if (selectedPlaylist === playlist.id) {
-                    preferredRefreshRef.current = null
-                    setSelectedPlaylist(null)
-                  }
-                  onNotice(`Playlist “${playlist.name}” deleted. Your files were not changed.`, 'info')
-                })
-              }} disabled={busy} title="Delete playlist" aria-label={`Delete ${playlist.name}`}><Trash2 size={14} /></button>
-            </div>
-            {renaming === playlist.id && <form className="playlist-rename" onSubmit={(event) => {
-              event.preventDefault()
-              const name = renameValue.trim()
-              if (!name) return
-              void guard(async () => {
-                await renamePlaylist(playlist.id, name)
-                setRenaming(null)
-                onNotice('Playlist renamed.', 'success')
-              })
-            }}><input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} maxLength={120} autoFocus /><button type="submit" aria-label="Save name"><Check size={14} /></button><button type="button" onClick={() => setRenaming(null)} aria-label="Cancel rename"><X size={14} /></button></form>}
-          </article>
-        ))}
+        {playlists.map((playlist, index) => playlistCard(playlist, !compact && index < 3))}
         {!playlists.length && <div className="playlist-empty">No playlists yet. Create one above, then add indexed videos.</div>}
       </div>
 
       {selectedPlaylist != null && <div className="playlist-detail">
         <div className="playlist-detail-head">
-          <h3>{playlists.find((playlist) => playlist.id === selectedPlaylist)?.name ?? 'Playlist'}</h3>
-          <button className="playlist-detail-play" onClick={() => {
-            const playlist = playlists.find((item) => item.id === selectedPlaylist)
-            if (playlist) playWholePlaylist(playlist)
-          }} disabled={busy || !items.length || !available}><Play size={14} fill="currentColor" /> Play playlist</button>
-          <button className="queue-primary" onClick={() => {
-            const ids = requireSelection()
-            if (!ids.length) return
-            debugLog('playlists', 'button_click', { control: 'add_videos', playlistId: selectedPlaylist, count: ids.length })
-            void guard(async () => {
-              await addPlaylistItems(selectedPlaylist, ids)
-              onSelectionConsumed?.()
-              onNotice(`${ids.length} video${ids.length === 1 ? '' : 's'} added to the playlist.`, 'success')
-            })
-          }} disabled={busy || !selectedMediaIds.length}>Add selected videos</button>
-          <button className="queue-primary" onClick={() => exportSelectedPlaylist('m3u')} disabled={busy || !items.length || !available} title="Export as M3U"><Download size={14} /> Export M3U</button>
-          <button className="queue-primary" onClick={() => exportSelectedPlaylist('wpl')} disabled={busy || !items.length || !available} title="Export as WPL"><Download size={14} /> Export WPL</button>
-        </div>
-        {items.length ? <div className="playlist-items">{items.map((item, index) => (
-          <div key={item.id}
-            className={`playlist-item ${item.availability_state !== 'available' ? 'missing' : ''} ${dragItem === item.id ? 'dragging' : ''}`}
-            draggable
-            onDragStart={() => setDragItem(item.id)}
-            onDragEnd={() => setDragItem(null)}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
-              event.preventDefault()
-              const from = dragItem
-              setDragItem(null)
-              if (from && from !== item.id) {
-                debugLog('playlists', 'reorder_item', { from, targetIndex: index })
-                void guard(async () => reorderPlaylistItem(from, index))
-              }
-            }}
-          >
-            <GripVertical size={14} />
-            <span className="playlist-item-index">{index + 1}</span>
-            <span className="playlist-item-copy" title={item.filename}>{item.filename}{item.availability_state !== 'available' && <em> · missing</em>}</span>
-            <span>{formatDuration(item.duration_seconds)}</span>
-            <button onClick={() => void guard(async () => playMediaNow(item.media_file_id))} disabled={busy} title="Play now" aria-label={`Play ${item.filename}`}><Play size={13} /></button>
-            <button onClick={() => void guard(async () => queueAdd([item.media_file_id], 'play_next'))} disabled={busy} title="Play next in queue" aria-label={`Play ${item.filename} next`}><SkipForward size={13} /></button>
-            <button onClick={() => void guard(async () => removePlaylistItem(item.id))} disabled={busy} title="Remove from playlist" aria-label={`Remove ${item.filename} from playlist`}><X size={13} /></button>
+          <div className="playlist-detail-title">
+            <span className="playlist-detail-kicker"><MoreHorizontal size={16} /> PLAYLIST</span>
+            <h3>{playlists.find((playlist) => playlist.id === selectedPlaylist)?.name ?? 'Playlist'}</h3>
+            <small>{items.length} videos · {formatDuration(items.reduce((total, item) => total + (item.duration_seconds ?? 0), 0))}</small>
           </div>
-        ))}</div> : <div className="playlist-empty">This playlist is empty. Select indexed videos above and choose “Add selected videos”.</div>}
+          <div className="playlist-detail-actions">
+            <button className="playlist-detail-play" onClick={() => {
+              const playlist = playlists.find((item) => item.id === selectedPlaylist)
+              if (playlist) playWholePlaylist(playlist)
+            }} disabled={busy || !items.length || !available}><Play size={14} fill="currentColor" /> Play playlist</button>
+            <button className="queue-primary" onClick={() => {
+              const ids = requireSelection()
+              if (!ids.length) return
+              debugLog('playlists', 'button_click', { control: 'add_videos', playlistId: selectedPlaylist, count: ids.length })
+              void guard(async () => {
+                await addPlaylistItems(selectedPlaylist, ids)
+                onSelectionConsumed?.()
+                onNotice(`${ids.length} video${ids.length === 1 ? '' : 's'} added to the playlist.`, 'success')
+              })
+            }} disabled={busy || !selectedMediaIds.length}>Add selected videos</button>
+            <button className="queue-primary" onClick={() => exportSelectedPlaylist('m3u')} disabled={busy || !items.length || !available} title="Export as M3U"><Download size={14} /> Export M3U</button>
+            <button className="queue-primary" onClick={() => exportSelectedPlaylist('wpl')} disabled={busy || !items.length || !available} title="Export as WPL"><Download size={14} /> Export WPL</button>
+          </div>
+        </div>
+        {items.length ? <>
+          <div className="playlist-track-head"><span>#</span><span /><span>TITLE</span><span><Clock3 size={12} /> LENGTH</span><span /></div>
+          <div className="playlist-items">{items.map((item, index) => (
+            <div key={item.id}
+              className={`playlist-item ${item.availability_state !== 'available' ? 'missing' : ''} ${dragItem === item.id ? 'dragging' : ''}`}
+              draggable
+              onDragStart={() => setDragItem(item.id)}
+              onDragEnd={() => setDragItem(null)}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault()
+                const from = dragItem
+                setDragItem(null)
+                if (from && from !== item.id) {
+                  debugLog('playlists', 'reorder_item', { from, targetIndex: index })
+                  void guard(async () => reorderPlaylistItem(from, index))
+                }
+              }}
+            >
+              <span className="playlist-item-index"><GripVertical size={12} className="playlist-grip" />{index + 1}</span>
+              <span className="playlist-item-art"><Disc3 size={14} /></span>
+              <span className="playlist-item-copy" title={item.filename}>{item.filename}{item.availability_state !== 'available' && <em> · missing</em>}</span>
+              <span className="playlist-item-time">{formatDuration(item.duration_seconds)}</span>
+              <div className="playlist-item-actions">
+                <button onClick={() => void guard(async () => playMediaNow(item.media_file_id))} disabled={busy} title="Play now" aria-label={`Play ${item.filename}`}><Play size={13} /></button>
+                <button onClick={() => void guard(async () => queueAdd([item.media_file_id], 'play_next'))} disabled={busy} title="Play next in queue" aria-label={`Play ${item.filename} next`}><SkipForward size={13} /></button>
+                <button onClick={() => void guard(async () => removePlaylistItem(item.id))} disabled={busy} title="Remove from playlist" aria-label={`Remove ${item.filename} from playlist`}><X size={13} /></button>
+              </div>
+            </div>
+          ))}</div>
+        </> : <div className="playlist-empty">This playlist is empty. Select indexed videos above and choose “Add selected videos”.</div>}
       </div>}
 
       {!available && <div className="queue-error"><AlertCircle size={15} />Playlist controls require the installed Windows desktop app.</div>}
