@@ -11,17 +11,17 @@
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(windows)]
-use windows::Win32::Foundation::{HWND, LPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM};
 #[cfg(windows)]
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumChildWindows, EnumWindows, GetClassNameW, GetWindowLongPtrW, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindow, SetParent, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, SW_HIDE, SW_RESTORE, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE, WS_CHILD,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
-    WS_OVERLAPPEDWINDOW, WS_POPUP,
+    GetWindowThreadProcessId, IsWindow, SetLayeredWindowAttributes, SetParent,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, LWA_ALPHA,
+    SW_HIDE, SW_RESTORE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    SW_SHOWNOACTIVATE, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_APPWINDOW,
+    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
 };
 
 static EMBEDDED_SENDER: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
@@ -234,8 +234,12 @@ pub fn move_embedded(_top_level_hwnd: isize, _rect: HostRect) -> Result<(), Stri
     Ok(())
 }
 
-/// Hides the embedded sender. The Chrome process and Cast session stay alive,
-/// so playback continues and reopening the panel is instant.
+/// Makes the embedded sender visually invisible while keeping its window alive.
+///
+/// `ShowWindow(SW_HIDE)` also hides Chrome's own receiver picker, which is
+/// anchored to this window. A fully transparent layered child keeps the Cast
+/// SDK running and lets Chrome show its native picker without ever exposing the
+/// sender page inside the app.
 #[cfg(windows)]
 pub fn hide_embedded() -> Result<(), String> {
     let Some(handle) = stored_window() else {
@@ -245,8 +249,19 @@ pub fn hide_embedded() -> Result<(), String> {
         return Ok(());
     };
     let hwnd = HWND(handle as *mut std::ffi::c_void);
-    if unsafe { IsWindow(Some(hwnd)).as_bool() } {
-        let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+    if !unsafe { IsWindow(Some(hwnd)).as_bool() } {
+        if let Ok(mut guard) = stored().lock() {
+            *guard = None;
+        }
+        return Ok(());
+    }
+    unsafe {
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let ex_style = (ex_style | WS_EX_LAYERED.0 as isize | WS_EX_TRANSPARENT.0 as isize)
+            & !(WS_EX_APPWINDOW.0 as isize);
+        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style);
+        SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_ALPHA)
+            .map_err(|error| format!("Could not conceal the Cast sender window ({error})."))?;
     }
     Ok(())
 }

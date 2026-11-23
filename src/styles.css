@@ -253,9 +253,10 @@
 .wizard-media-row.selected .wizard-media-check{border-color:#bda5ff;background:#bda5ff}
 .wizard-media-name{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wizard-media-row small{color:#77747f;font-size:8px;white-space:nowrap}
-/* ROLLAPLAY Connect — native-feeling device selection overlay. */
-.connect-backdrop{position:fixed;z-index:40;inset:0;display:flex;align-items:flex-start;justify-content:flex-end;padding:74px 22px 112px;background:transparent;pointer-events:none}
-.connect-panel{width:min(432px,calc(100vw - 28px));max-height:100%;display:flex;flex-direction:column;gap:14px;padding:20px;overflow:auto;border:1px solid #303030;border-radius:11px;background:#181818;box-shadow:0 22px 60px rgba(0,0,0,.68);color:#f2f0ec;pointer-events:auto}
+/* ROLLAPLAY Connect — app-owned device menu anchored under the Cast pill. */
+.cast-menu{position:relative;display:flex;align-items:center}
+.sender-hidden-host{position:absolute;top:42px;right:0;width:1px;height:1px;opacity:0;pointer-events:none}
+.connect-panel{position:absolute;top:calc(100% + 9px);right:0;z-index:60;width:min(400px,calc(100vw - 28px));max-height:min(560px,calc(100vh - 150px));display:flex;flex-direction:column;gap:14px;padding:18px;overflow:auto;border:1px solid #303030;border-radius:11px;background:#181818;box-shadow:0 22px 60px rgba(0,0,0,.68);color:#f2f0ec}
 .connect-header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .connect-brand{display:flex;align-items:center;gap:10px}
 .connect-mark{width:31px;height:31px;display:grid;place-items:center;border:1px solid #e53935;border-radius:7px;background:#101010;color:#e53935;font:900 11px/1 "Segoe UI",sans-serif;letter-spacing:-.5px}
@@ -304,13 +305,9 @@
 .connect-picker-note>svg{flex:none;color:#ff8c32}
 .connect-picker-note span{flex:1}
 .connect-picker-note button{border:0;background:transparent;color:#ff8c32;font-size:8px;font-weight:800;letter-spacing:.6px;cursor:pointer}
-.connect-sender-wrap{display:flex;flex-direction:column;gap:5px;padding:7px;border:1px solid #303030;border-radius:7px;background:#101010}
-.connect-sender-wrap>span{color:#777;font-size:7px;font-weight:800;letter-spacing:1.1px}
-.connect-sender-wrap i{display:inline-block;width:4px;height:4px;margin:0 4px 2px;border-radius:999px;background:#555}
-.connect-sender-host{width:100%;height:116px;overflow:hidden;border:1px solid #262626;border-radius:5px;background:#101010}
 .connect-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:11px;border-top:1px solid #303030}
 .connect-footer>div{display:flex;align-items:center;gap:6px;color:#999;font-size:8px;font-weight:800;letter-spacing:.8px}
-@media(max-width:600px){.connect-backdrop{padding:54px 8px 108px;justify-content:center}.connect-panel{gap:11px;padding:14px}.connect-heading h2{font-size:20px}.connect-sender-host{height:104px}.connect-list{max-height:34vh}.connect-indicator{font-size:7px}}
+@media(max-width:600px){.connect-panel{position:fixed;top:62px;right:10px;left:10px;width:auto;max-height:calc(100vh - 150px);gap:11px;padding:14px}.sender-hidden-host{top:38px;right:0}.connect-heading h2{font-size:20px}.connect-list{max-height:34vh}.connect-indicator{font-size:7px}}
 .playlist-manager-compact .queue-section-head{display:none}
 .playlist-manager-compact .playlist-grid{max-height:190px;overflow:auto}
 .playlist-manager-compact .playlist-items{max-height:170px}

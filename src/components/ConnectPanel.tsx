@@ -1,4 +1,4 @@
-import { useEffect, useState, type RefObject } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import useSWR from 'swr'
 import {
   AlertCircle, Cast, Check, LoaderCircle, Monitor, RefreshCw, Tv, X,
@@ -16,7 +16,6 @@ type Props = {
   onNotice: Notice
   playback: CastPlaybackSnapshot | null
   localPlaying: boolean
-  senderHostRef: RefObject<HTMLDivElement | null>
 }
 
 type DeviceTone = 'playing' | 'connected' | 'connecting' | 'failed' | 'available'
@@ -32,8 +31,9 @@ function toneLabel(tone: DeviceTone) {
 }
 
 export default function ConnectPanel({
-  open, onClose, onNotice, playback, localPlaying, senderHostRef,
+  open, onClose, onNotice, playback, localPlaying,
 }: Props) {
+  const panelRef = useRef<HTMLElement | null>(null)
   const [pending, setPending] = useState<CastDevice | null>(null)
   const [connecting, setConnecting] = useState(false)
   const [failed, setFailed] = useState<string | null>(null)
@@ -75,6 +75,26 @@ export default function ConnectPanel({
       setFailed(null)
     }
   }, [open])
+
+  // Behave like a menu anchored to the Cast pill, not a blocking modal.
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Element)) return
+      if (panelRef.current?.contains(target) || target.closest('.device-pill')) return
+      onClose()
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open, onClose])
 
   const toneFor = (device: CastDevice): DeviceTone => {
     if (pending?.id === device.id && connecting) return 'connecting'
@@ -120,9 +140,8 @@ export default function ConnectPanel({
   if (!open) return null
 
   return (
-    <div className="connect-backdrop" role="presentation">
-      <section className="connect-panel" role="dialog" aria-modal="true" aria-labelledby="connect-title">
-        <header className="connect-header">
+    <section ref={panelRef} className="connect-panel" role="dialog" aria-label="Cast devices" aria-labelledby="connect-title">
+      <header className="connect-header">
           <div className="connect-brand">
             <span className="connect-mark" aria-hidden="true">RP</span>
             <div><b>ROLLA<b className="connect-emphasis">PLAY</b></b><span>ROCKNROLLA MEDIA STATION</span></div>
@@ -194,21 +213,15 @@ export default function ConnectPanel({
         {connecting && pending && (
           <div className="connect-picker-note" role="status">
             <LoaderCircle size={14} className="spin-icon" />
-            <span>Choose <b>{pending.name}</b> in the Cast dialog below. Chrome’s Web SDK cannot preselect a receiver from the web page.</span>
+            <span>Choose <b>{pending.name}</b> in Chrome’s Cast dialog. The Web SDK cannot preselect a receiver from the page.</span>
             <button onClick={cancelConnection}>Cancel</button>
           </div>
         )}
-
-        <div className="connect-sender-wrap">
-          <span>CAST DIALOG <i /> OFFICIAL WEB SENDER</span>
-          <div ref={senderHostRef} className="connect-sender-host" />
-        </div>
 
         <footer className="connect-footer">
           <div><AlertCircle size={13} /><span>DON&apos;T SEE YOUR DEVICE?</span></div>
           <button onClick={() => void refreshDevices()} disabled={isLoading}>REFRESH DEVICES</button>
         </footer>
-      </section>
-    </div>
+    </section>
   )
 }

@@ -188,7 +188,7 @@ export default function CastPanel() {
 
       <div className="cast-info-grid">
         <article className="cast-info-card"><span><Globe size={15} /> GOOGLE CHROME</span><strong>{status?.chrome_installed ? 'Detected' : 'Not found'}</strong><small>{status?.chrome_installed ? status.chrome_path ?? 'Registered install location' : 'The official Cast sender SDK requires Chrome'}</small></article>
-        <article className="cast-info-card"><span><Cast size={15} /> SENDER PANEL</span><strong>{senderWindowLabels[status?.sender_window_state ?? 'not_launched'] ?? 'Unknown'}</strong><small>Sender page {status?.sender_page_connected ? 'connected' : 'not connected'} · last seen {formatAgo(status?.sender_page_last_seen_ms_ago ?? null)}</small></article>
+        <article className="cast-info-card"><span><Cast size={15} /> HIDDEN SENDER</span><strong>{senderWindowLabels[status?.sender_window_state ?? 'not_launched'] ?? 'Unknown'}</strong><small>Sender page {status?.sender_page_connected ? 'connected' : 'not connected'} · last seen {formatAgo(status?.sender_page_last_seen_ms_ago ?? null)}</small></article>
         <article className="cast-info-card"><span><Cast size={15} /> DISCOVERY</span><strong>{castStateLabel(snapshot.cast_state)}</strong><small>Session: {sessionStateLabel(snapshot.session_state)}</small></article>
         <article className="cast-info-card"><span><Cast size={15} /> CONNECTED DEVICE</span><strong>{connectedDevice ?? 'None'}</strong><small>{status?.bridge_state === 'running' ? `Local sender bridge on 127.0.0.1:${status.bridge_port ?? ''}` : 'Local sender bridge stopped'}</small></article>
       </div>
@@ -197,10 +197,10 @@ export default function CastPanel() {
         <div className="cast-controls-heading">
           <div>
             <h3>Cast sender</h3>
-            <p>The player stays in this window. Chrome runs only the official Cast SDK inside the sender panel; once a receiver is selected it stays connected, and hiding the panel does not stop playback.</p>
+            <p>The player stays in this window. Chrome runs only the official Cast SDK, hidden from view; once a receiver is selected it stays connected, and closing the device menu does not stop playback.</p>
           </div>
           <div className="cast-controls-actions">
-            <button className="button-primary" onClick={() => runAction(() => launchCastSender(), connectedDevice ? `Sender ready. Casting to ${connectedDevice}.` : 'Sender ready. Choose your TV in the sender panel.')} disabled={!isDesktop || isWorking}>
+            <button className="button-primary" onClick={() => runAction(() => launchCastSender(), connectedDevice ? `Sender ready. Casting to ${connectedDevice}.` : 'Sender ready. Choose your TV from the device menu.')} disabled={!isDesktop || isWorking}>
               {isWorking ? <LoaderCircle size={15} className="spin-icon" /> : <Cast size={15} />} Open Connect
             </button>
             <button className="folder-action" onClick={() => runAction(() => stopCastSender(), 'The Cast sender was closed.')} disabled={!isDesktop || isWorking}>Close sender</button>
