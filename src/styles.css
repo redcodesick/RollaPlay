@@ -428,6 +428,10 @@
 .download-check input{margin:2px 0 0;accent-color:#ff8c32;flex:none}
 .download-check strong{display:block;color:#f2f0ec;font-size:11px}
 .download-check small{display:block;margin-top:3px;color:#999;font-size:10px;line-height:1.5}
+.download-winget{margin:0 0 14px;padding:12px;border:1px solid #303030;border-radius:8px;background:#101010}
+.download-winget .download-label{margin-bottom:9px}
+.download-check.compact{margin:0 0 8px;padding:8px 9px;border-color:#222;background:#181818}
+.download-winget .folder-action{width:100%;justify-content:center}
 .download-actions{display:flex;flex-wrap:wrap;align-items:center;gap:9px}
 .download-actions .button-primary{display:inline-flex;align-items:center;gap:8px}
 .download-hint{margin:12px 0 0;color:#999;font-size:10px;line-height:1.6}

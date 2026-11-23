@@ -5,7 +5,7 @@ import { AlertCircle, Check, Download, FolderOpen, LoaderCircle, X } from 'lucid
 import { getMediaDirectories, isDesktopApp, type MediaDirectory, type ScanResult } from '../media'
 import { diagnosticError, friendlyError, invokeTracked } from '../diagnostics'
 import {
-  cancelDownload, getDownloaderTools, onDownloadProgress, onToolInstallProgress,
+  cancelDownload, getDownloaderTools, installToolsWinget, onDownloadProgress, onToolInstallProgress,
   prepareTools, startDownload, type DownloadProgress, type DownloaderTools,
 } from '../downloader'
 
@@ -15,6 +15,8 @@ export default function Downloader() {
   const [folder, setFolder] = useState('')
   const [linksText, setLinksText] = useState('')
   const [hd, setHd] = useState(true)
+  const [installYtDlp, setInstallYtDlp] = useState(true)
+  const [installFfmpeg, setInstallFfmpeg] = useState(true)
   const [tools, setTools] = useState<DownloaderTools | null>(null)
   const [busy, setBusy] = useState(false)
   const [preparing, setPreparing] = useState(false)
@@ -66,7 +68,7 @@ export default function Downloader() {
         }
       } else if (update.phase === 'failed') {
         setBusy(false)
-        setError('A download failed. Check the link, then try again.')
+        setError(update.detail || 'A download failed. Check the link, then try again.')
       } else if (update.phase === 'cancelled') {
         setBusy(false)
         setNotice('Download cancelled. Already downloaded files were kept.')
@@ -104,6 +106,23 @@ export default function Downloader() {
     }
   }, [hd])
 
+  const installWithWinget = useCallback(async () => {
+    setPreparing(true)
+    setError('')
+    setNotice('')
+    setInstallDetail('')
+    try {
+      const result = await installToolsWinget(installYtDlp, installFfmpeg)
+      setTools(result)
+      setNotice('Selected tools are installed with WinGet.')
+    } catch (installError) {
+      diagnosticError('downloader', 'winget_install_failed', installError, { installYtDlp, installFfmpeg })
+      setError(friendlyError(installError))
+    } finally {
+      setPreparing(false)
+    }
+  }, [installYtDlp, installFfmpeg])
+
   const run = useCallback(async () => {
     setError('')
     setNotice('')
@@ -116,7 +135,16 @@ export default function Downloader() {
     setBusy(true)
     try {
       if (!tools?.yt_dlp_found || (hd && !tools.hd_ready)) {
-        const prepared = await prepareTools(hd)
+        const needYtDlp = !tools?.yt_dlp_found
+        const needFfmpeg = hd && !tools?.hd_ready
+        let prepared: DownloaderTools
+        try {
+          prepared = await installToolsWinget(needYtDlp, needFfmpeg)
+        } catch (wingetError) {
+          diagnosticError('downloader', 'winget_auto_install_failed', wingetError, { needYtDlp, needFfmpeg })
+          setInstallDetail('WinGet was unavailable; fetching official releases instead.')
+          prepared = await prepareTools(hd)
+        }
         setTools(prepared)
       }
       await startDownload(folder, urls, hd)
@@ -170,9 +198,36 @@ export default function Downloader() {
           />
 
           <label className="download-check">
-            <input type="checkbox" checked={hd} onChange={(event) => setHd(event.target.checked)} disabled={busy} />
-            <span><strong>HD quality · H.264/AAC MP4</strong><small>Uses FFmpeg from its official GitHub release, downloaded once on first use.</small></span>
+            <input
+              type="checkbox"
+              checked={hd}
+              onChange={(event) => {
+                setHd(event.target.checked)
+                if (event.target.checked) setInstallFfmpeg(true)
+              }}
+              disabled={busy}
+            />
+            <span><strong>HD quality · H.264/AAC MP4</strong><small>Uses FFmpeg to combine 720p/1080p AVC with AAC. Install it below or fetch it from GitHub.</small></span>
           </label>
+
+          <div className="download-winget">
+            <div className="download-label">Install tools with WinGet</div>
+            <label className="download-check compact">
+              <input type="checkbox" checked={installYtDlp} onChange={(event) => setInstallYtDlp(event.target.checked)} disabled={busy || preparing} />
+              <span><strong>yt-dlp</strong><small>YouTube downloader · updated to latest</small></span>
+            </label>
+            <label className="download-check compact">
+              <input type="checkbox" checked={installFfmpeg} onChange={(event) => setInstallFfmpeg(event.target.checked)} disabled={busy || preparing} />
+              <span><strong>FFmpeg</strong><small>HD video/audio merge</small></span>
+            </label>
+            <button
+              className="folder-action"
+              onClick={() => void installWithWinget()}
+              disabled={busy || preparing || (!installYtDlp && !installFfmpeg)}
+            >
+              {preparing ? 'Installing…' : 'Install selected with WinGet'}
+            </button>
+          </div>
 
           <div className="download-actions">
             <button className="button-primary" onClick={() => void run()} disabled={busy || preparing}>
@@ -180,8 +235,9 @@ export default function Downloader() {
               {busy ? 'Downloading…' : 'Download'}
             </button>
             {busy && <button className="folder-cancel" onClick={() => void cancel()}><X size={15} /> Cancel</button>}
-            {needsTools && !busy && <button className="folder-action" onClick={() => void prepare()} disabled={preparing}>{preparing ? 'Preparing…' : 'Prepare tools'}</button>}
+            {needsTools && !busy && <button className="folder-action" onClick={() => void prepare()} disabled={preparing}>{preparing ? 'Preparing…' : 'Prepare from GitHub'}</button>}
           </div>
+          <p className="download-hint">Only public videos and playlists can be downloaded. Private or sign-in-only links are not supported.</p>
           {tools?.hint && !hd && <p className="download-hint">{tools.hint}</p>}
         </div>
 

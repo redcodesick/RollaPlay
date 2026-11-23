@@ -27,7 +27,7 @@ mod thumbnail;
 
 use cast_discovery::CastDevice;
 use cast_sender::{CastDiagnosticsSnapshot, CastEventReport, CastPlaybackSnapshot, CastSenderManager, CastSenderStatus};
-use downloader::{cancel_download, downloader_tools, prepare_tools, start_download};
+use downloader::{cancel_download, downloader_tools, install_tools_winget, prepare_tools, start_download};
 use media_server::{ConnectionTestResult, MediaServerManager, MediaServerStatus, StreamDiagnosticsSnapshot};
 use network::NetworkDiagnostics;
 use playback_orchestrator::PlaybackOrchestrator;
@@ -2548,6 +2548,7 @@ pub fn run() {
             cancel_media_scan,
             downloader_tools,
             prepare_tools,
+            install_tools_winget,
             start_download,
             cancel_download,
             import_playlist_files,

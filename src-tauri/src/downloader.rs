@@ -1,14 +1,15 @@
 //! YouTube downloader for Cast-friendly media.
 //!
-//! `yt-dlp.exe` ships with the app. By default the Downloader fetches a
-//! progressive H.264/AAC MP4 that needs no extra tools. When the user enables
-//! HD quality, a bundled WinGet script installs FFmpeg and yt-dlp merges the
-//! separate 1080p AVC and AAC streams. Whole playlists are downloaded into the
-//! folder chosen in the UI. The child process is launched without a shell and
-//! no URL or filesystem path is ever written to diagnostics.
+//! The Downloader fetches a progressive H.264/AAC MP4 by default. HD quality
+//! merges separate AVC/AAC streams with FFmpeg. Tools are never bundled: they
+//! can be installed from their official GitHub releases or, when ticked in the
+//! UI, with WinGet. Whole playlists are downloaded into the folder chosen in
+//! the UI. The child process is launched without a shell and no URL or
+//! filesystem path is ever written to diagnostics.
 
 use serde::Serialize;
 use std::{
+    ffi::OsString,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -27,6 +28,7 @@ const SD_FORMAT: &str = "best[ext=mp4][acodec!=none][vcodec!=none]/18";
 const HD_FORMAT: &str = "bv*[vcodec^=avc]+ba[acodec^=mp4a]/b[ext=mp4]/b";
 const POLL_INTERVAL: Duration = Duration::from_millis(120);
 const INSTALL_SCRIPT: &str = include_str!("../../scripts/install-downloader-tools.ps1");
+const WINGET_SCRIPT: &str = include_str!("../../scripts/install-downloader-tools-winget.ps1");
 
 #[derive(Clone, Serialize)]
 pub struct DownloaderTools {
@@ -98,6 +100,25 @@ fn tools_directory(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(directory)
 }
 
+fn search_directory(directory: &Path, executable: &str, depth: usize) -> Option<PathBuf> {
+    if depth > 4 {
+        return None;
+    }
+    let mut subdirectories = Vec::new();
+    for entry in std::fs::read_dir(directory).ok()?.flatten() {
+        let path = entry.path();
+        if path.file_name().and_then(|name| name.to_str()) == Some(executable) && path.is_file() {
+            return Some(path);
+        }
+        if path.is_dir() {
+            subdirectories.push(path);
+        }
+    }
+    subdirectories
+        .into_iter()
+        .find_map(|path| search_directory(&path, executable, depth + 1))
+}
+
 fn find_executable(app: &AppHandle, name: &str) -> Option<PathBuf> {
     let executable = format!("{name}.exe");
     let mut candidates = Vec::new();
@@ -105,7 +126,15 @@ fn find_executable(app: &AppHandle, name: &str) -> Option<PathBuf> {
         candidates.push(data.join("bin").join(&executable));
     }
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        candidates.push(PathBuf::from(local).join(r"Microsoft\WinGet\Links").join(&executable));
+        let local_root = PathBuf::from(&local);
+        candidates.push(local_root.join(r"Microsoft\WinGet\Links").join(&executable));
+        // WinGet installs portable tools in versioned folders that are not on
+        // PATH until the shell restarts. Scan them so a fresh install works
+        // immediately without restarting RollaPlay.
+        let packages = local_root.join(r"Microsoft\WinGet\Packages");
+        if let Some(found) = search_directory(&packages, &executable, 0) {
+            return Some(found);
+        }
     }
     if let Some(found) = candidates.into_iter().find(|path| path.is_file()) {
         return Some(found);
@@ -121,9 +150,9 @@ fn locate_tools(app: &AppHandle) -> DownloaderTools {
     let yt_dlp = find_executable(app, "yt-dlp");
     let ffmpeg = find_executable(app, "ffmpeg");
     let hint = if yt_dlp.is_none() {
-        "yt-dlp will be downloaded from its official GitHub release on first use.".to_string()
+        "Install yt-dlp with WinGet or fetch it from its official GitHub release.".to_string()
     } else if ffmpeg.is_none() {
-        "HD quality needs FFmpeg from its official GitHub release. Tick HD and choose Prepare tools, or use standard quality.".to_string()
+        "HD quality needs FFmpeg. Tick HD and install it with WinGet, or use standard quality.".to_string()
     } else {
         String::new()
     };
@@ -199,6 +228,27 @@ fn progress_line(line: &str, index: usize, total: usize) -> Option<DownloadProgr
     Some(DownloadProgress { index, total, phase: "downloading", percent: Some(percent), detail })
 }
 
+/// Maps raw tool output to a fixed, safe message. Nothing from the tool is
+/// echoed back, so URLs, paths and tokens can never reach diagnostics.
+fn failure_hint(line: &str) -> Option<&'static str> {
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("private video") || lower.contains("private playlist") || lower.contains("video is private") || lower.contains("this video is private") {
+        Some("This link is private or sign-in-only. Use a public video or playlist; private links need a YouTube sign-in.")
+    } else if lower.contains("video unavailable") || lower.contains("has been removed") || lower.contains("is not available") {
+        Some("This video is unavailable or has been removed.")
+    } else if lower.contains("sign in to confirm") || lower.contains("captcha") || lower.contains("bot") {
+        Some("YouTube asked for a sign-in. Use a public link or try again later.")
+    } else if lower.contains("unsupported url") || lower.contains("unable to extract") || lower.contains("no video formats") {
+        Some("This link is not a supported YouTube video or playlist.")
+    } else if lower.contains("yt-dlp") && (lower.contains("update") || lower.contains("outdated") || lower.contains("newer")) {
+        Some("yt-dlp is out of date. Install the latest version with WinGet and try again.")
+    } else if lower.contains("http error 403") || lower.contains("forbidden") {
+        Some("YouTube refused the download. Try again later or update yt-dlp with WinGet.")
+    } else {
+        None
+    }
+}
+
 fn emit(app: &AppHandle, index: usize, total: usize, phase: &'static str, detail: &str) {
     let _ = app.emit(PROGRESS_EVENT, DownloadProgress {
         index,
@@ -260,6 +310,7 @@ fn run_downloads(
 ) {
     let _guard = DownloadGuard(active);
     let total = urls.len();
+    let failure: Arc<Mutex<Option<&'static str>>> = Arc::new(Mutex::new(None));
 
     for (index, url) in urls.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
@@ -289,12 +340,21 @@ fn run_downloads(
             });
         }
         // Drain stderr so a full pipe cannot block the download. Raw tool
-        // output can contain URLs or paths and is deliberately discarded.
-        if let Some(stderr) = child.stderr.take() {
+        // output can contain URLs or paths; only fixed hints are forwarded.
+        let stderr_thread = child.stderr.take().map(|stderr| {
+            let failure_hint_ref = Arc::clone(&failure);
             std::thread::spawn(move || {
-                let _ = BufReader::new(stderr).lines().count();
-            });
-        }
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    if let Some(hint) = failure_hint(&line) {
+                        if let Ok(mut slot) = failure_hint_ref.lock() {
+                            if slot.is_none() {
+                                *slot = Some(hint);
+                            }
+                        }
+                    }
+                }
+            })
+        });
 
         let status = loop {
             if cancel.load(Ordering::Relaxed) {
@@ -308,8 +368,16 @@ fn run_downloads(
             }
             std::thread::sleep(POLL_INTERVAL);
         };
+        if let Some(thread) = stderr_thread {
+            let _ = thread.join();
+        }
         if !status.success() {
-            emit(&app, index, total, "failed", "Download failed. Check the link and update yt-dlp");
+            let detail = failure
+                .lock()
+                .ok()
+                .and_then(|slot| *slot)
+                .unwrap_or("Download failed. Check the link and update yt-dlp");
+            emit(&app, index, total, "failed", detail);
             return;
         }
         emit(&app, index, total, "complete", "Download finished");
@@ -367,67 +435,122 @@ pub fn cancel_download(state: State<'_, DownloadState>) -> bool {
     state.cancel()
 }
 
+async fn run_tool_installer(
+    app: &AppHandle,
+    script_name: &str,
+    script: &str,
+    args: Vec<OsString>,
+    starting_detail: &str,
+) -> Result<(), String> {
+    let directory = tools_directory(app)?;
+    let script_path = directory.join(script_name);
+    std::fs::write(&script_path, script)
+        .map_err(|_| "Could not prepare the downloader setup script".to_string())?;
+    let shell = powershell().ok_or_else(|| "Windows PowerShell is unavailable".to_string())?;
+    let installer_app = app.clone();
+    let starting = starting_detail.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = installer_app.emit(INSTALL_EVENT, ToolInstallProgress {
+            phase: "starting",
+            detail: starting,
+        });
+        let mut command = Command::new(shell);
+        command
+            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script_path);
+        for arg in args {
+            command.arg(arg);
+        }
+        command.stdout(Stdio::piped()).stderr(Stdio::null());
+        configure_command(&mut command);
+        let mut child = command.spawn().map_err(|_| "Could not start the tool installer".to_string())?;
+        let stdout_thread = child.stdout.take().map(|stdout| {
+            let emit_app = installer_app.clone();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    let detail = line.trim();
+                    // The scripts print generic lines; still drop anything
+                    // that could contain a URL, a path or a credential.
+                    if detail.is_empty() || detail.len() > 120 || detail.contains("http") || detail.contains(":\\") {
+                        continue;
+                    }
+                    let _ = emit_app.emit(INSTALL_EVENT, ToolInstallProgress {
+                        phase: "output",
+                        detail: detail.to_string(),
+                    });
+                }
+            })
+        });
+        let status = child.wait().map_err(|_| "The tool installer stopped unexpectedly".to_string())?;
+        if let Some(thread) = stdout_thread {
+            let _ = thread.join();
+        }
+        if status.success() {
+            let _ = installer_app.emit(INSTALL_EVENT, ToolInstallProgress {
+                phase: "complete",
+                detail: "Downloader tools are ready".to_string(),
+            });
+            Ok(())
+        } else {
+            let _ = installer_app.emit(INSTALL_EVENT, ToolInstallProgress {
+                phase: "failed",
+                detail: "Tool installation failed".to_string(),
+            });
+            Err("Tool installation failed. Check your internet connection and try again.".to_string())
+        }
+    })
+    .await
+    .map_err(|_| "The tool installer stopped unexpectedly".to_string())?
+}
+
 /// Fetches the official binaries from their GitHub releases the first time
 /// they are needed. Files live in LocalAppData, never in the install folder.
 #[tauri::command]
 pub async fn prepare_tools(app: AppHandle, include_ffmpeg: bool) -> Result<DownloaderTools, String> {
     let directory = tools_directory(&app)?;
-    let shell = powershell().ok_or_else(|| "Windows PowerShell is unavailable".to_string())?;
-    let script = directory.join("install-downloader-tools.ps1");
-    std::fs::write(&script, INSTALL_SCRIPT)
-        .map_err(|_| "Could not prepare the downloader setup script".to_string())?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let _ = app.emit(INSTALL_EVENT, ToolInstallProgress {
-            phase: "starting",
-            detail: if include_ffmpeg { "Preparing yt-dlp and FFmpeg" } else { "Preparing yt-dlp" }.to_string(),
-        });
-        let mut command = Command::new(shell);
-        command
-            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
-            .arg(&script)
-            .arg("-TargetDirectory").arg(&directory);
-        if include_ffmpeg {
-            command.arg("-IncludeFFmpeg");
-        }
-        command.stdout(Stdio::piped()).stderr(Stdio::null());
-        configure_command(&mut command);
-        let mut child = command.spawn().map_err(|_| "Could not start the tool installer".to_string())?;
-        if let Some(stdout) = child.stdout.take() {
-            let install_app = app.clone();
-            std::thread::spawn(move || {
-                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                    let detail = line.trim();
-                    // The script's output is generic; still drop anything that
-                    // could contain a URL or a Windows path.
-                    if detail.is_empty() || detail.len() > 120 || detail.contains("http") || detail.contains(":\\") {
-                        continue;
-                    }
-                    let _ = install_app.emit(INSTALL_EVENT, ToolInstallProgress {
-                        phase: "output",
-                        detail: detail.to_string(),
-                    });
-                }
-            });
-        }
-        let status = child.wait().map_err(|_| "The tool installer stopped unexpectedly".to_string())?;
-        let tools = locate_tools(&app);
-        let ready = tools.yt_dlp_found && (!include_ffmpeg || tools.hd_ready);
-        if status.success() && ready {
-            let _ = app.emit(INSTALL_EVENT, ToolInstallProgress {
-                phase: "complete",
-                detail: "Downloader tools are ready".to_string(),
-            });
-            Ok(tools)
-        } else {
-            let _ = app.emit(INSTALL_EVENT, ToolInstallProgress {
-                phase: "failed",
-                detail: "Tool installation failed".to_string(),
-            });
-            Err("Could not download the tools. Check your internet connection and try again.".to_string())
-        }
-    })
-    .await
-    .map_err(|_| "The tool installer stopped unexpectedly".to_string())?
+    let mut args = vec![OsString::from("-TargetDirectory"), OsString::from(directory)];
+    if include_ffmpeg {
+        args.push(OsString::from("-IncludeFFmpeg"));
+    }
+    let starting = if include_ffmpeg { "Preparing yt-dlp and FFmpeg" } else { "Preparing yt-dlp" };
+    run_tool_installer(&app, "install-downloader-tools.ps1", INSTALL_SCRIPT, args, starting).await?;
+    let tools = locate_tools(&app);
+    if !tools.yt_dlp_found || (include_ffmpeg && !tools.hd_ready) {
+        return Err("Could not verify the downloaded tools. Try again or install them with WinGet.".to_string());
+    }
+    Ok(tools)
+}
+
+/// Installs exactly the tools the user ticked via WinGet's official packages.
+#[tauri::command]
+pub async fn install_tools_winget(
+    app: AppHandle,
+    install_ytdlp: bool,
+    install_ffmpeg: bool,
+) -> Result<DownloaderTools, String> {
+    let mut args = Vec::new();
+    if install_ytdlp {
+        args.push(OsString::from("-InstallYtDlp"));
+    }
+    if install_ffmpeg {
+        args.push(OsString::from("-InstallFfmpeg"));
+    }
+    if args.is_empty() {
+        return Err("Select at least one tool to install.".to_string());
+    }
+    run_tool_installer(
+        &app,
+        "install-downloader-tools-winget.ps1",
+        WINGET_SCRIPT,
+        args,
+        "Installing selected tools with WinGet",
+    )
+    .await?;
+    let tools = locate_tools(&app);
+    if (install_ytdlp && !tools.yt_dlp_found) || (install_ffmpeg && !tools.hd_ready) {
+        return Err("WinGet finished but the tools were not found. Restart RollaPlay and try again.".to_string());
+    }
+    Ok(tools)
 }
 
 #[cfg(test)]
@@ -442,6 +565,14 @@ mod tests {
         assert!(validate_youtube_url("file:///C:/secret.txt").is_err());
         assert!(validate_youtube_url("https://example.com/video").is_err());
         assert!(validate_youtube_url("not a link").is_err());
+    }
+
+    #[test]
+    fn explains_private_and_unavailable_links_without_echoing_them() {
+        let hint = failure_hint("ERROR: [youtube] VIDEO_ID: Private video. Sign in if you've been granted access").unwrap();
+        assert!(hint.contains("private"));
+        assert!(failure_hint("ERROR: [youtube] VIDEO_ID: Video unavailable").is_some());
+        assert!(failure_hint("[download] Destination: F:\\secret\\clip.mp4").is_none());
     }
 
     #[test]

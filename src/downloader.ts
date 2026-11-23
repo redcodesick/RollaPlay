@@ -29,6 +29,9 @@ export const getDownloaderTools = () =>
 export const prepareTools = (includeFfmpeg: boolean) =>
   invokeTracked<DownloaderTools>('prepare_tools', { includeFfmpeg }, 'downloader')
 
+export const installToolsWinget = (installYtDlp: boolean, installFfmpeg: boolean) =>
+  invokeTracked<DownloaderTools>('install_tools_winget', { installYtDlp, installFfmpeg }, 'downloader')
+
 export const startDownload = (directory: string, urls: string[], hd: boolean) =>
   invokeTracked<void>('start_download', { directory, urls, hd }, 'downloader')
 

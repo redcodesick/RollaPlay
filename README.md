@@ -47,7 +47,7 @@ The default grid preview is 320 × 180 at JPEG quality 82. The library screen of
 
 Open **Downloader** in the sidebar, choose a destination folder, and paste one video link or a whole playlist link (one link per line). RollaPlay downloads Cast-friendly **H.264/AAC MP4** files, adds the folder to your library, and scans it automatically — the new videos appear in Recently added and can go straight into a Cast playlist.
 
-The installer stays small: the official `yt-dlp.exe` and, for HD quality, FFmpeg are downloaded on first use from their own GitHub releases into `%LOCALAPPDATA%\app.windowsmediastation.local\bin`. **Standard quality** uses a progressive 360p MP4 and needs no FFmpeg. Tick **HD quality** to merge 720p/1080p AVC video with AAC audio; the app fetches FFmpeg once via `scripts/install-downloader-tools.ps1`. Only YouTube links are accepted; downloads run without a shell and can be cancelled.
+The installer stays small: no third-party binaries are bundled. In the Downloader you can tick **yt-dlp** and/or **FFmpeg** and press **Install selected with WinGet** — the app runs `scripts/install-downloader-tools-winget.ps1` against the official WinGet packages and streams progress into the status card. If WinGet is unavailable, **Prepare from GitHub** fetches the same official releases into `%LOCALAPPDATA%\app.windowsmediastation.local\bin`. **Standard quality** uses a progressive 360p MP4 and needs no FFmpeg. Tick **HD quality** to merge 720p/1080p AVC video with AAC audio. Only public YouTube links are accepted; private or sign-in-only links show a clear error, and downloads run without a shell and can be cancelled.
 
 This matters because the Cast Default Media Receiver on many TVs cannot decode **AV1/VP9** — those WebM files play audio but show a black picture. RollaPlay never transcodes during playback; the Downloader simply saves a compatible copy up front.
 
@@ -71,10 +71,14 @@ Cross-platform Rust unit tests cover cache safety/invalidation, migrations, scan
 
 The browser preview can verify UI layout and interactions only. Folder scanning, Tauri commands, Windows Shell extraction, drive-unplug behavior, Chrome sender behavior, real Cast discovery, and installer behavior require the native desktop app.
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes and unreleased changes.
+
 ## License
 
 RollaPlay is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) (SPDX: `PolyForm-Noncommercial-1.0.0`). Use, changes, and distribution are permitted for noncommercial purposes; commercial use requires a separate agreement with the licensor.
 
 ## Validation status
 
-On Windows the frontend build, Rust tests (79 passed, 1 ignored), and packaged NSIS/MSI builds have all been verified; recorded results are in [docs/windows-validation.md](docs/windows-validation.md). The user validated LAN Chromecast playback and receiver controls on 2026-11-23, but a follow-up run found that a finished video did not start the next one. The sender's stale media-session latch was fixed and the installers rebuilt; automatic `IdleReason.FINISHED` progression is pending re-validation on the receiver, tracked in [docs/cast-testing.md](docs/cast-testing.md). Hardware results are user-reported without per-item logs or screenshots.
+On Windows the frontend build, Rust tests (80 passed, 1 ignored), and packaged NSIS/MSI builds have all been verified; recorded results are in [docs/windows-validation.md](docs/windows-validation.md). The user validated LAN Chromecast playback, receiver controls and automatic `IdleReason.FINISHED` playlist advance on 2026-11-23 with the rebuilt installer. Unsupported AV1/VP9 sources are addressed by the in-app Downloader, which saves H.264/AAC MP4 copies. Hardware results are user-reported without per-item logs or screenshots.
