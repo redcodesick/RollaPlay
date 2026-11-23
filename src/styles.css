@@ -438,6 +438,7 @@
 .download-tool-status{display:flex;flex-direction:column;gap:7px}
 .download-tool-status .status-pill{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid #303030;border-radius:7px;background:#101010;color:#999;font-size:10px}
 .download-tool-status .status-pill.ok{color:#f2f0ec;border-color:rgba(255,140,50,.35)}
+.download-tool-status .status-pill.warn{color:#e53935;border-color:rgba(229,57,53,.4)}
 .download-install-detail{margin-top:12px;padding:9px 10px;border:1px solid rgba(255,140,50,.3);border-radius:7px;background:rgba(255,140,50,.07);color:#ffb27a;font-size:10px;line-height:1.5}
 .download-progress-list{margin-top:14px;display:flex;flex-direction:column;gap:8px}
 .download-progress-row{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid #303030;border-radius:7px;background:#101010}

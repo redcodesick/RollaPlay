@@ -10,6 +10,7 @@ All notable changes to RollaPlay are documented here. The format follows [Keep a
 - Live status output while WinGet runs, so tool installation progress is visible in the Downloader status card.
 - Safe, specific explanations for private/sign-in-only links, unavailable videos, sign-in challenges, unsupported links and outdated yt-dlp. Raw tool output is never echoed.
 - Discovery of tools inside WinGet's versioned package folders, so a fresh install works without restarting the app or shell.
+- Downloader tool preflight checks: RollaPlay runs `yt-dlp --version` and `ffmpeg -version` when the view opens and before every download. Missing or non-responding tools are installed automatically with WinGet (GitHub fallback), and the status pills now distinguish "ready", "not responding" and "not installed".
 
 ### Fixed
 
@@ -20,6 +21,8 @@ All notable changes to RollaPlay are documented here. The format follows [Keep a
 - yt-dlp now receives no stdin, so it cannot hang forever on an interactive prompt in the hidden app process.
 - Downloads that produce no output for five minutes are stopped with a clear stall message instead of hanging silently.
 - Progress listeners stay attached when the destination folder changes, and each download row now has a real progress bar.
+- A broken or stale tool executable is no longer treated as ready; WinGet's newest versioned copy is preferred and tool installation is retried when a version check fails.
+- Unmapped downloader errors keep only fixed placeholders for URLs, paths, tokens and video IDs before being written to diagnostics.
 
 ## [0.1.0] - 2026-11-23
 

@@ -10,14 +10,14 @@
 use serde::Serialize;
 use std::{
     ffi::OsString,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::Duration,
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use url::Url;
@@ -28,13 +28,18 @@ const SD_FORMAT: &str = "best[ext=mp4][acodec!=none][vcodec!=none]/18";
 const HD_FORMAT: &str = "bv*[vcodec^=avc]+ba[acodec^=mp4a]/b[ext=mp4]/b";
 const POLL_INTERVAL: Duration = Duration::from_millis(120);
 const STALL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const TOOL_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 const INSTALL_SCRIPT: &str = include_str!("../../scripts/install-downloader-tools.ps1");
 const WINGET_SCRIPT: &str = include_str!("../../scripts/install-downloader-tools-winget.ps1");
 
 #[derive(Clone, Serialize)]
 pub struct DownloaderTools {
     pub yt_dlp_found: bool,
+    /// True only when the executable exists and answers `--version`.
+    pub yt_dlp_ready: bool,
     pub ffmpeg_found: bool,
+    /// True only when the executable exists and answers `-version`.
+    pub ffmpeg_ready: bool,
     pub hd_ready: bool,
     pub hint: String,
     /// Internal absolute paths; skipped so they never reach the frontend or diagnostics.
@@ -106,18 +111,30 @@ fn search_directory(directory: &Path, executable: &str, depth: usize) -> Option<
         return None;
     }
     let mut subdirectories = Vec::new();
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+    let mut consider = |path: PathBuf| {
+        let modified = std::fs::metadata(&path)
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .unwrap_or(UNIX_EPOCH);
+        if newest.as_ref().map_or(true, |(current, _)| modified > *current) {
+            newest = Some((modified, path));
+        }
+    };
     for entry in std::fs::read_dir(directory).ok()?.flatten() {
         let path = entry.path();
         if path.file_name().and_then(|name| name.to_str()) == Some(executable) && path.is_file() {
-            return Some(path);
-        }
-        if path.is_dir() {
+            consider(path);
+        } else if path.is_dir() {
             subdirectories.push(path);
         }
     }
-    subdirectories
-        .into_iter()
-        .find_map(|path| search_directory(&path, executable, depth + 1))
+    for subdirectory in subdirectories {
+        if let Some(found) = search_directory(&subdirectory, executable, depth + 1) {
+            consider(found);
+        }
+    }
+    newest.map(|(_, path)| path)
 }
 
 fn find_executable(app: &AppHandle, name: &str) -> Option<PathBuf> {
@@ -150,21 +167,90 @@ fn find_executable(app: &AppHandle, name: &str) -> Option<PathBuf> {
 fn locate_tools(app: &AppHandle) -> DownloaderTools {
     let yt_dlp = find_executable(app, "yt-dlp");
     let ffmpeg = find_executable(app, "ffmpeg");
-    let hint = if yt_dlp.is_none() {
-        "Install yt-dlp with WinGet or fetch it from its official GitHub release.".to_string()
-    } else if ffmpeg.is_none() {
-        "HD quality needs FFmpeg. Tick HD and install it with WinGet, or use standard quality.".to_string()
-    } else {
-        String::new()
-    };
     DownloaderTools {
         yt_dlp_found: yt_dlp.is_some(),
+        yt_dlp_ready: false,
         ffmpeg_found: ffmpeg.is_some(),
-        hd_ready: ffmpeg.is_some(),
-        hint,
+        ffmpeg_ready: false,
+        hd_ready: false,
+        hint: String::new(),
         yt_dlp_path: yt_dlp,
         ffmpeg_path: ffmpeg,
     }
+}
+
+/// A file on disk is not enough: WinGet can leave an old or broken shim that
+/// never answers. Run the tool's version command so "ready" means usable.
+fn probe_tool(executable: &Path, version_arg: &str) -> bool {
+    let mut command = Command::new(executable);
+    command
+        .arg(version_arg)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .stdin(Stdio::null());
+    configure_command(&mut command);
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    let reader = child.stdout.take().map(|stdout| {
+        std::thread::spawn(move || {
+            let mut output = String::new();
+            let _ = BufReader::new(stdout).read_to_string(&mut output);
+            output
+        })
+    });
+    let deadline = Instant::now() + TOOL_PROBE_TIMEOUT;
+    loop {
+        if let Ok(Some(status)) = child.try_wait() {
+            let output = reader.and_then(|handle| handle.join().ok()).unwrap_or_default();
+            return status.success() && !output.trim().is_empty();
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return false;
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+fn tool_hint(tools: &DownloaderTools) -> String {
+    if !tools.yt_dlp_ready {
+        if tools.yt_dlp_found {
+            "yt-dlp was found but did not respond to a version check. Install it again with WinGet.".to_string()
+        } else {
+            "Install yt-dlp with WinGet or fetch it from its official GitHub release.".to_string()
+        }
+    } else if !tools.ffmpeg_ready {
+        if tools.ffmpeg_found {
+            "FFmpeg was found but did not respond to a version check. Install it again with WinGet, or use standard quality.".to_string()
+        } else {
+            "HD quality needs a working FFmpeg. Tick HD and install it with WinGet, or use standard quality.".to_string()
+        }
+    } else {
+        String::new()
+    }
+}
+
+fn checked_tools(app: &AppHandle) -> DownloaderTools {
+    let mut tools = locate_tools(app);
+    if let Some(path) = tools.yt_dlp_path.as_deref() {
+        tools.yt_dlp_ready = probe_tool(path, "--version");
+    }
+    if let Some(path) = tools.ffmpeg_path.as_deref() {
+        tools.ffmpeg_ready = probe_tool(path, "-version");
+    }
+    tools.hd_ready = tools.ffmpeg_ready;
+    tools.hint = tool_hint(&tools);
+    tools
+}
+
+async fn current_tools(app: &AppHandle) -> DownloaderTools {
+    let probe_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || checked_tools(&probe_app))
+        .await
+        .unwrap_or_else(|_| locate_tools(app))
 }
 
 /// Only real YouTube links are accepted. Rejecting other schemes and hosts
@@ -235,12 +321,16 @@ fn failure_hint(line: &str) -> Option<&'static str> {
     let lower = line.to_ascii_lowercase();
     if lower.contains("private") {
         Some("This link is private or sign-in-only. Use a public video or playlist; private links need a YouTube sign-in.")
-    } else if lower.contains("video unavailable") || lower.contains("has been removed") || lower.contains("is not available") || lower.contains("not found") {
+    } else if lower.contains("video unavailable") || lower.contains("has been removed") || lower.contains("is not available") || lower.contains("not found") || lower.contains("does not exist") {
         Some("This video is unavailable or has been removed.")
-    } else if lower.contains("sign in") || lower.contains("captcha") || lower.contains("bot") || lower.contains("age-restricted") || lower.contains("members") {
+    } else if lower.contains("sign in") || lower.contains("captcha") || lower.contains("bot") || lower.contains("human") || lower.contains("age-restricted") || lower.contains("members") {
         Some("YouTube asked for a sign-in or membership. Use a public link or try again later.")
-    } else if lower.contains("unsupported url") || lower.contains("unable to extract") || lower.contains("no video formats") {
+    } else if lower.contains("unsupported url") || lower.contains("not a valid url") || lower.contains("unable to extract") || lower.contains("no video formats") {
         Some("This link is not a supported YouTube video or playlist.")
+    } else if lower.contains("requested format") || lower.contains("format is not available") {
+        Some("No Cast-friendly format was offered for this video. Try standard quality or another public link.")
+    } else if lower.contains("rate limit") || lower.contains("too many") {
+        Some("YouTube is rate-limiting this PC. Wait a few minutes and try again.")
     } else if lower.contains("yt-dlp") && (lower.contains("update") || lower.contains("outdated") || lower.contains("newer")) {
         Some("yt-dlp is out of date. Install the latest version with WinGet and try again.")
     } else if lower.contains("http error 403") || lower.contains("forbidden") {
@@ -250,23 +340,49 @@ fn failure_hint(line: &str) -> Option<&'static str> {
     }
 }
 
-fn log_unmapped_error(app: &AppHandle, line: &str) {
-    const KEYWORDS: [&str; 12] = [
-        "error", "private", "sign in", "bot", "captcha", "unavailable", "removed",
-        "403", "404", "ffmpeg", "unsupported", "timeout",
-    ];
-    let lower = line.to_ascii_lowercase();
-    let matched = KEYWORDS
-        .iter()
-        .filter(|keyword| lower.contains(**keyword))
-        .copied()
+fn sanitize_error_line(line: &str) -> String {
+    let cleaned = line
+        .split_whitespace()
+        .filter_map(|token| {
+            let trimmed = token.trim_matches(|c: char| matches!(c, '"' | '\'' | ',' | ';' | ':' | ')' | '(' | '[' | ']'));
+            if trimmed.is_empty() {
+                return None;
+            }
+            let lower = trimmed.to_ascii_lowercase();
+            if lower.starts_with("http") || lower.contains("://") {
+                return Some("[url]".to_string());
+            }
+            if lower.contains("token=") || lower.contains("bearer") || lower.starts_with("authorization") {
+                return Some("[secret]".to_string());
+            }
+            if lower.contains(":\\") || lower.contains("\\\\") || lower.starts_with('/') {
+                return Some("[path]".to_string());
+            }
+            if trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') && trimmed.len() >= 10 {
+                return Some("[id]".to_string());
+            }
+            if trimmed.len() > 28 {
+                return Some("[text]".to_string());
+            }
+            Some(trimmed.to_string())
+        })
+        .take(24)
         .collect::<Vec<_>>()
-        .join(",");
+        .join(" ");
+    let mut result = cleaned;
+    if result.len() > 180 {
+        result.truncate(180);
+        result.push_str("…");
+    }
+    result
+}
+
+fn log_unmapped_error(app: &AppHandle, line: &str) {
     let _ = crate::wizard_diag_log(
         app.clone(),
         "downloader".to_string(),
         "unmapped_tool_error".to_string(),
-        Some(format!("bytes={};keywords={}", line.len(), matched)),
+        Some(format!("bytes={};text={}", line.len(), sanitize_error_line(line))),
     );
 }
 
@@ -439,7 +555,7 @@ fn powershell() -> Option<PathBuf> {
 
 #[tauri::command]
 pub async fn downloader_tools(app: AppHandle) -> DownloaderTools {
-    locate_tools(&app)
+    current_tools(&app).await
 }
 
 #[tauri::command]
@@ -450,12 +566,12 @@ pub async fn start_download(
     urls: Vec<String>,
     hd: bool,
 ) -> Result<(), String> {
-    let tools = locate_tools(&app);
-    if !tools.yt_dlp_found {
-        return Err("Prepare downloader tools before starting.".to_string());
+    let tools = current_tools(&app).await;
+    if !tools.yt_dlp_ready {
+        return Err("yt-dlp is missing or not working. Install it with WinGet and try again.".to_string());
     }
-    if hd && !tools.hd_ready {
-        return Err("Prepare tools with HD enabled before starting.".to_string());
+    if hd && !tools.ffmpeg_ready {
+        return Err("FFmpeg is missing or not working. Install it with WinGet and try again.".to_string());
     }
     let directory = crate::canonicalize_media_path(Path::new(&directory))
         .map_err(|_| "Choose a download folder that exists on this device".to_string())?;
@@ -561,9 +677,9 @@ pub async fn prepare_tools(app: AppHandle, include_ffmpeg: bool) -> Result<Downl
     }
     let starting = if include_ffmpeg { "Preparing yt-dlp and FFmpeg" } else { "Preparing yt-dlp" };
     run_tool_installer(&app, "install-downloader-tools.ps1", INSTALL_SCRIPT, args, starting).await?;
-    let tools = locate_tools(&app);
-    if !tools.yt_dlp_found || (include_ffmpeg && !tools.hd_ready) {
-        return Err("Could not verify the downloaded tools. Try again or install them with WinGet.".to_string());
+    let tools = current_tools(&app).await;
+    if !tools.yt_dlp_ready || (include_ffmpeg && !tools.ffmpeg_ready) {
+        return Err("The downloaded tools did not respond to a version check. Try WinGet instead.".to_string());
     }
     Ok(tools)
 }
@@ -593,9 +709,9 @@ pub async fn install_tools_winget(
         "Installing selected tools with WinGet",
     )
     .await?;
-    let tools = locate_tools(&app);
-    if (install_yt_dlp && !tools.yt_dlp_found) || (install_ffmpeg && !tools.hd_ready) {
-        return Err("WinGet finished but the tools were not found. Restart RollaPlay and try again.".to_string());
+    let tools = current_tools(&app).await;
+    if (install_yt_dlp && !tools.yt_dlp_ready) || (install_ffmpeg && !tools.ffmpeg_ready) {
+        return Err("WinGet finished, but a selected tool still does not respond. Try Prepare from GitHub.".to_string());
     }
     Ok(tools)
 }
@@ -630,5 +746,45 @@ mod tests {
         assert!(progress_line("[download] Destination: F:\\Videos\\clip.mp4", 0, 2).is_none());
         let merging = progress_line("[Merger] Merging formats into \"clip.mp4\"", 0, 2).unwrap();
         assert_eq!(merging.phase, "merging");
+    }
+
+    fn fake_tools(found: bool, ready: bool) -> DownloaderTools {
+        DownloaderTools {
+            yt_dlp_found: found,
+            yt_dlp_ready: ready,
+            ffmpeg_found: found,
+            ffmpeg_ready: ready,
+            hd_ready: ready,
+            hint: String::new(),
+            yt_dlp_path: None,
+            ffmpeg_path: None,
+        }
+    }
+
+    #[test]
+    fn tool_hint_separates_missing_from_installed_but_broken() {
+        let missing = fake_tools(false, false);
+        assert!(tool_hint(&missing).contains("Install yt-dlp"));
+
+        let broken = fake_tools(true, false);
+        assert!(tool_hint(&broken).contains("did not respond"));
+
+        let ready = fake_tools(true, true);
+        assert!(tool_hint(&ready).is_empty());
+    }
+
+    #[test]
+    fn sanitized_errors_never_keep_urls_paths_tokens_or_ids() {
+        let raw = "ERROR: [youtube] dQw4w9WgXcQ: Sign in token=abc123 https://example.com/watch?v=x F:\\secret\\clip.mp4";
+        let safe = sanitize_error_line(raw);
+        assert!(!safe.contains("http"));
+        assert!(!safe.contains("F:"));
+        assert!(!safe.contains("dQw4w9WgXcQ"));
+        assert!(!safe.contains("abc123"));
+        assert!(!safe.contains("clip.mp4"));
+        assert!(safe.contains("[url]"));
+        assert!(safe.contains("[path]"));
+        assert!(safe.contains("[id]"));
+        assert!(safe.contains("[secret]"));
     }
 }

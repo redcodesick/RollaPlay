@@ -3,7 +3,9 @@ import { invokeTracked } from './diagnostics'
 
 export type DownloaderTools = {
   yt_dlp_found: boolean
+  yt_dlp_ready: boolean
   ffmpeg_found: boolean
+  ffmpeg_ready: boolean
   hd_ready: boolean
   hint: string
 }

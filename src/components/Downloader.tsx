@@ -26,6 +26,8 @@ export default function Downloader() {
   const [notice, setNotice] = useState('')
   const completedRef = useRef<Set<number>>(new Set())
   const indexedRef = useRef(false)
+  const autoCheckRef = useRef(false)
+  const provisionRef = useRef<Promise<DownloaderTools> | null>(null)
 
   const addToLibrary = useCallback(async () => {
     if (indexedRef.current || !folder) return
@@ -51,12 +53,54 @@ export default function Downloader() {
   const addToLibraryRef = useRef(addToLibrary)
   useEffect(() => { addToLibraryRef.current = addToLibrary }, [addToLibrary])
 
+  // One shared check so the mount effect and the Download button can never
+  // start two installers at the same time. WinGet first, GitHub as fallback.
+  const provisionTools = useCallback((current: DownloaderTools | null, wantHd: boolean) => {
+    const needYtDlp = !current?.yt_dlp_ready
+    const needFfmpeg = wantHd && !current?.ffmpeg_ready
+    if (!needYtDlp && !needFfmpeg && current) return Promise.resolve(current)
+    if (provisionRef.current) return provisionRef.current
+
+    const task = (async () => {
+      setPreparing(true)
+      setInstallDetail('Checking downloader tools…')
+      let result: DownloaderTools
+      try {
+        result = await installToolsWinget(needYtDlp, needFfmpeg)
+      } catch (wingetError) {
+        diagnosticError('downloader', 'winget_auto_install_failed', wingetError, { needYtDlp, needFfmpeg })
+        setInstallDetail('WinGet was unavailable; fetching official releases instead.')
+        result = await prepareTools(wantHd)
+      }
+      setTools(result)
+      setInstallDetail('yt-dlp and FFmpeg responded to their version checks.')
+      return result
+    })()
+    provisionRef.current = task
+    void task.finally(() => { provisionRef.current = null }).catch(() => {})
+    return task
+  }, [])
+
   useEffect(() => {
     if (!isDesktop) return
     let disposed = false
     const stops: Array<() => void> = []
     void getDownloaderTools()
-      .then((result) => { if (!disposed) setTools(result) })
+      .then(async (result) => {
+        if (disposed) return
+        setTools(result)
+        if (autoCheckRef.current) return
+        autoCheckRef.current = true
+        if (result.yt_dlp_ready && result.ffmpeg_ready) return
+        try {
+          await provisionTools(result, true)
+          if (!disposed) setNotice('Downloader tools are ready.')
+        } catch (provisionError) {
+          if (disposed) return
+          diagnosticError('downloader', 'auto_tool_check_failed', provisionError)
+          setError('Some downloader tools are missing or not working. Press Install selected with WinGet to fix them.')
+        }
+      })
       .catch((loadError) => diagnosticError('downloader', 'tools_load_failed', loadError))
 
     void onDownloadProgress((update) => {
@@ -86,7 +130,7 @@ export default function Downloader() {
     }).then((stop) => { if (disposed) stop(); else stops.push(stop) }).catch((listenError) => diagnosticError('downloader', 'install_listener_failed', listenError))
 
     return () => { disposed = true; stops.forEach((stop) => stop()) }
-  }, [isDesktop])
+  }, [isDesktop, provisionTools])
 
   const pickFolder = useCallback(async () => {
     setError('')
@@ -101,7 +145,7 @@ export default function Downloader() {
     try {
       const result = await prepareTools(hd)
       setTools(result)
-      setNotice(result.hd_ready && hd ? 'yt-dlp and FFmpeg are ready for HD downloads.' : 'yt-dlp is ready for standard downloads.')
+      setNotice(result.yt_dlp_ready && (!hd || result.ffmpeg_ready) ? 'yt-dlp and FFmpeg responded to their version checks.' : 'yt-dlp is ready for standard downloads.')
     } catch (prepareError) {
       diagnosticError('downloader', 'tools_prepare_failed', prepareError, { hd })
       setError(friendlyError(prepareError))
@@ -118,7 +162,7 @@ export default function Downloader() {
     try {
       const result = await installToolsWinget(installYtDlp, installFfmpeg)
       setTools(result)
-      setNotice('Selected tools are installed with WinGet.')
+      setNotice('Selected tools are installed and responding.')
     } catch (installError) {
       diagnosticError('downloader', 'winget_install_failed', installError, { installYtDlp, installFfmpeg })
       setError(friendlyError(installError))
@@ -136,29 +180,24 @@ export default function Downloader() {
     completedRef.current = new Set()
     indexedRef.current = false
     setProgress({})
-    setBusy(true)
+    setBusy(false)
     try {
-      if (!tools?.yt_dlp_found || (hd && !tools.hd_ready)) {
-        const needYtDlp = !tools?.yt_dlp_found
-        const needFfmpeg = hd && !tools?.hd_ready
-        let prepared: DownloaderTools
-        try {
-          prepared = await installToolsWinget(needYtDlp, needFfmpeg)
-        } catch (wingetError) {
-          diagnosticError('downloader', 'winget_auto_install_failed', wingetError, { needYtDlp, needFfmpeg })
-          setInstallDetail('WinGet was unavailable; fetching official releases instead.')
-          prepared = await prepareTools(hd)
-        }
-        setTools(prepared)
+      let current = tools
+      if (!current) current = await getDownloaderTools()
+      const ready = await provisionTools(current, hd)
+      if (!ready.yt_dlp_ready || (hd && !ready.ffmpeg_ready)) {
+        throw new Error('Downloader tools are still not ready. Install them with WinGet and try again.')
       }
-      await startDownload(folder, urls, hd)
+      setBusy(true)
       setNotice('Downloading… your library will update when the videos are ready.')
+      await startDownload(folder, urls, hd)
     } catch (downloadError) {
       diagnosticError('downloader', 'download_start_failed', downloadError, { hd, linkCount: urls.length })
       setBusy(false)
+      setNotice('')
       setError(friendlyError(downloadError))
     }
-  }, [folder, hd, linksText, tools])
+  }, [folder, hd, linksText, tools, provisionTools])
 
   const cancel = useCallback(async () => {
     try {
@@ -173,7 +212,9 @@ export default function Downloader() {
     return <section className="section-page downloader-page"><h1>YouTube downloader</h1><p>This feature works in the installed Windows app.</p></section>
   }
 
-  const needsTools = !tools?.yt_dlp_found || (hd && !tools.hd_ready)
+  const needsTools = !tools?.yt_dlp_ready || (hd && !tools?.ffmpeg_ready)
+  const toolLabel = (found?: boolean, ready?: boolean) => ready ? 'ready' : found ? 'not responding' : 'not installed'
+  const toolClass = (ready?: boolean, found?: boolean) => ready ? 'ok' : found ? 'warn' : ''
   const orderedProgress = Object.values(progress).sort((a, b) => a.index - b.index)
 
   return (
@@ -242,15 +283,16 @@ export default function Downloader() {
             {needsTools && !busy && <button className="folder-action" onClick={() => void prepare()} disabled={preparing}>{preparing ? 'Preparing…' : 'Prepare from GitHub'}</button>}
           </div>
           <p className="download-hint">Only public videos and playlists can be downloaded. Private or sign-in-only links are not supported.</p>
-          {tools?.hint && !hd && <p className="download-hint">{tools.hint}</p>}
+          {tools?.hint && <p className="download-hint">{tools.hint}</p>}
         </div>
 
         <div className="downloader-card">
           <div className="download-card-head"><span className="download-card-icon"><Download size={18} /></span><div><h2>Downloader status</h2><small>Offline tools, no account required.</small></div></div>
           <div className="download-tool-status">
-            <span className={`status-pill ${tools?.yt_dlp_found ? 'ok' : ''}`}><span className="status-dot" /> yt-dlp {tools?.yt_dlp_found ? 'ready' : 'not installed'}</span>
-            <span className={`status-pill ${tools?.ffmpeg_found ? 'ok' : ''}`}><span className="status-dot" /> FFmpeg {tools?.ffmpeg_found ? 'ready' : 'not installed'}</span>
+            <span className={`status-pill ${toolClass(tools?.yt_dlp_ready, tools?.yt_dlp_found)}`}><span className="status-dot" /> yt-dlp {toolLabel(tools?.yt_dlp_found, tools?.yt_dlp_ready)}</span>
+            <span className={`status-pill ${toolClass(tools?.ffmpeg_ready, tools?.ffmpeg_found)}`}><span className="status-dot" /> FFmpeg {toolLabel(tools?.ffmpeg_found, tools?.ffmpeg_ready)}</span>
           </div>
+          <p className="download-hint">RollaPlay checks both tools before every download and installs anything that is missing or not responding.</p>
           {installDetail && <div className="download-install-detail">{installDetail}</div>}
           {orderedProgress.length > 0 && <div className="download-progress-list">
             {orderedProgress.map((item) => (
