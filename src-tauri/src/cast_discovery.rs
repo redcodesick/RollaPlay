@@ -20,7 +20,8 @@ use std::{
 const MDNS_GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
 const MDNS_PORT: u16 = 5353;
 const CAST_SERVICE: &str = "_googlecast._tcp.local.";
-const MAX_PACKET: usize = 4096;
+// mDNS responses with several TXT records can exceed the old 4 KiB buffer.
+const MAX_PACKET: usize = 9216;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CastDevice {
@@ -52,48 +53,88 @@ struct DeviceAccumulator {
 /// Runs one live mDNS discovery pass. The command layer calls this on a
 /// blocking thread; the timeout keeps the UI responsive when no device replies.
 pub fn discover(timeout: Duration) -> Result<Vec<CastDevice>, String> {
-    // Port 5353 receives the normal multicast response. Fall back to an
-    // ephemeral port (with a unicast-response hint) when another local service
-    // already owns mDNS.
-    let socket = UdpSocket::bind(("0.0.0.0", MDNS_PORT))
-        .or_else(|_| UdpSocket::bind("0.0.0.0:0"))
-        .map_err(|_| "Could not open a local socket for Cast discovery.".to_string())?;
-    socket
-        .set_read_timeout(Some(Duration::from_millis(250)))
-        .map_err(|_| "Could not configure Cast discovery.".to_string())?;
-    socket
-        .set_multicast_loop_v4(true)
-        .map_err(|_| "Could not enable Cast discovery on this network.".to_string())?;
-
     let interfaces = crate::network::detect_network().interfaces;
     let selected: Option<LanAddress> = select_lan_address(&interfaces);
-    let multicast_interface = selected
-        .as_ref()
-        .and_then(|address| address.ipv4.parse::<Ipv4Addr>().ok())
-        .unwrap_or(Ipv4Addr::UNSPECIFIED);
-    if socket
-        .join_multicast_v4(&MDNS_GROUP, &multicast_interface)
-        .is_err()
-        && multicast_interface != Ipv4Addr::UNSPECIFIED
-    {
-        let _ = socket.join_multicast_v4(&MDNS_GROUP, &Ipv4Addr::UNSPECIFIED);
+    let mut candidates: Vec<Ipv4Addr> = interfaces
+        .iter()
+        .filter(|interface| interface.is_up && interface.is_running && !interface.is_loopback && !interface.is_tun)
+        .flat_map(|interface| interface.ipv4_addresses.iter())
+        .filter_map(|address| address.parse::<Ipv4Addr>().ok())
+        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified() && !ip.is_multicast())
+        .collect();
+    if let Some(ip) = selected.as_ref().and_then(|address| address.ipv4.parse::<Ipv4Addr>().ok()) {
+        if !candidates.contains(&ip) {
+            candidates.insert(0, ip);
+        }
     }
 
-    socket
-        .send_to(&build_query(), (MDNS_GROUP, MDNS_PORT))
-        .map_err(|_| "Could not send Cast discovery on this network.".to_string())?;
+    // Bind one socket per LAN address. Windows chooses the outgoing interface
+    // from the socket's local address, so a single 0.0.0.0 socket can query a
+    // VPN/virtual adapter while the receiver sits on the physical LAN.
+    let mut sockets: Vec<(Ipv4Addr, UdpSocket)> = Vec::new();
+    for ip in &candidates {
+        let Ok(socket) = UdpSocket::bind((*ip, MDNS_PORT)).or_else(|_| UdpSocket::bind((*ip, 0))) else { continue };
+        let _ = socket.set_read_timeout(Some(Duration::from_millis(80)));
+        let _ = socket.set_multicast_loop_v4(true);
+        // mDNS requires IP TTL 255. Chromecast receivers may ignore queries
+        // with a lower TTL, which shows up as an empty device list.
+        let _ = socket.set_multicast_ttl_v4(255);
+        if socket.join_multicast_v4(&MDNS_GROUP, ip).is_err() {
+            continue;
+        }
+        sockets.push((*ip, socket));
+    }
+    if sockets.is_empty() {
+        if let Ok(socket) = UdpSocket::bind(("0.0.0.0", MDNS_PORT)).or_else(|_| UdpSocket::bind("0.0.0.0:0")) {
+            let _ = socket.set_read_timeout(Some(Duration::from_millis(80)));
+            let _ = socket.set_multicast_loop_v4(true);
+            let _ = socket.set_multicast_ttl_v4(255);
+            let _ = socket.join_multicast_v4(&MDNS_GROUP, &Ipv4Addr::UNSPECIFIED);
+            sockets.push((Ipv4Addr::UNSPECIFIED, socket));
+        }
+    }
+    if sockets.is_empty() {
+        return Err("Could not open a local socket for Cast discovery.".to_string());
+    }
 
-    let deadline = Instant::now() + timeout;
+    // Send both a multicast query and a unicast-response query. Some receivers
+    // answer only one of them depending on their mDNS implementation.
+    let multicast_query = build_query(false);
+    let unicast_query = build_query(true);
+    let mut sent_any = false;
+    for (_, socket) in &sockets {
+        let unicast_sent = socket.send_to(&unicast_query, (MDNS_GROUP, MDNS_PORT)).is_ok();
+        let multicast_sent = socket.send_to(&multicast_query, (MDNS_GROUP, MDNS_PORT)).is_ok();
+        sent_any |= unicast_sent || multicast_sent;
+    }
+    if !sent_any {
+        return Err("Could not send Cast discovery on this network.".to_string());
+    }
+
+    let started = Instant::now();
+    let deadline = started + timeout;
+    let mut repeat_at = started + Duration::from_millis(900);
     let mut found: HashMap<String, DeviceAccumulator> = HashMap::new();
     let mut host_addresses: HashMap<String, String> = HashMap::new();
     let mut buffer = [0u8; MAX_PACKET];
     while Instant::now() < deadline {
-        match socket.recv_from(&mut buffer) {
-            Ok((length, _)) => parse_message(&buffer[..length], &mut found, &mut host_addresses),
-            Err(error) => match error.kind() {
-                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => continue,
-                _ => break,
-            },
+        if found.is_empty() && Instant::now() >= repeat_at {
+            // A second query catches receivers that answer only after their
+            // multicast socket has warmed up.
+            for (_, socket) in &sockets {
+                let _ = socket.send_to(&unicast_query, (MDNS_GROUP, MDNS_PORT));
+                let _ = socket.send_to(&multicast_query, (MDNS_GROUP, MDNS_PORT));
+            }
+            repeat_at = Instant::now() + Duration::from_secs(2);
+        }
+        for (_, socket) in &mut sockets {
+            match socket.recv_from(&mut buffer) {
+                Ok((length, _)) => parse_message(&buffer[..length], &mut found, &mut host_addresses),
+                Err(error) => match error.kind() {
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => continue,
+                    _ => continue,
+                },
+            }
         }
     }
 
@@ -167,7 +208,7 @@ fn encode_name(name: &str, output: &mut Vec<u8>) {
     output.push(0);
 }
 
-fn build_query() -> Vec<u8> {
+fn build_query(unicast_response: bool) -> Vec<u8> {
     let mut query = Vec::with_capacity(64);
     query.extend_from_slice(&0u16.to_be_bytes());
     query.extend_from_slice(&0u16.to_be_bytes());
@@ -175,7 +216,10 @@ fn build_query() -> Vec<u8> {
     query.extend_from_slice(&[0u8; 6]);
     encode_name(CAST_SERVICE, &mut query);
     query.extend_from_slice(&12u16.to_be_bytes()); // PTR
-    query.extend_from_slice(&0x8001u16.to_be_bytes()); // IN + unicast-response hint
+    // 0x8000 is the mDNS "unicast response" hint. Send both forms because
+    // receivers differ in which one they answer.
+    let qclass = if unicast_response { 0x8001u16 } else { 0x0001u16 };
+    query.extend_from_slice(&qclass.to_be_bytes());
     query
 }
 
@@ -449,6 +493,14 @@ mod tests {
         assert_eq!(entry.friendly_name.as_deref(), Some("Xiaomi Mi Box"));
         assert_eq!(entry.port, Some(8009));
         assert_eq!(hosts.get("mi-box.local").map(String::as_str), Some("192.168.1.42"));
+    }
+
+    #[test]
+    fn query_sends_both_multicast_and_unicast_response_hints() {
+        let multicast = build_query(false);
+        let unicast = build_query(true);
+        assert_eq!(&multicast[multicast.len() - 2..], &[0x00, 0x01]);
+        assert_eq!(&unicast[unicast.len() - 2..], &[0x80, 0x01]);
     }
 
     #[test]

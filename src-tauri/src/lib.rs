@@ -1715,7 +1715,7 @@ fn clear_media_stream_diagnostics(server: State<'_, MediaServerManager>) {
 /// talk to the sender page and never returns credentials or streaming URLs.
 #[tauri::command]
 async fn discover_cast_devices() -> Result<Vec<CastDevice>, String> {
-    tokio::task::spawn_blocking(|| cast_discovery::discover(Duration::from_secs(2)))
+    tokio::task::spawn_blocking(|| cast_discovery::discover(Duration::from_secs(4)))
         .await
         .map_err(|_| "Cast discovery could not start.".to_string())?
 }

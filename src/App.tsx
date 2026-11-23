@@ -13,7 +13,7 @@ import PlaylistManager from './components/PlaylistManager'
 import { CastCheck, ChromeCheck, NetworkCheck } from './components/SetupChecks'
 import {
   castDeviceName, castSendControl, embedCastSender, formatSeconds, getCastPlaybackState,
-  hideCastSender, isCastAvailable, launchCastSender, onCastPlaybackEvent,
+  hideCastSender, isCastAvailable, launchCastSender,
   playerStateLabel, showCastSender, type SenderHostRect,
 } from './cast'
 import {
@@ -272,7 +272,6 @@ function App() {
   const [selectedMediaIds, setSelectedMediaIds] = useState<number[]>([])
   const [notice, setNotice] = useState<{ message: string; level: Phase5Notification['level'] } | null>(null)
   const [connectOpen, setConnectOpen] = useState(false)
-  const [senderEmbedded, setSenderEmbedded] = useState(false)
   const [playingOverride, setPlayingOverride] = useState<boolean | null>(null)
   const [volumePreview, setVolumePreview] = useState<number | null>(null)
   const senderHostRef = useRef<HTMLDivElement | null>(null)
@@ -401,7 +400,6 @@ function App() {
         ? await showCastSender(rect)
         : await embedCastSender(rect)
       senderEmbeddedRef.current = embedded
-      setSenderEmbedded(embedded)
       // The sender page must never be visible. Concealing the window keeps the
       // SDK alive and lets Chrome open its own picker next to the Cast pill.
       await hideCastSender()
@@ -417,41 +415,9 @@ function App() {
     setConnectOpen(false)
   }, [showNotice])
 
-  // Spotify-style device picker: the sender panel is only needed while choosing
-  // a receiver. Once a receiver is selected it hides itself and playback stays
-  // controlled from the app's player bar.
-  useEffect(() => {
-    let active = true
-    const unlisten = onCastPlaybackEvent((event) => {
-      if (!active) return
-      const deviceChosen =
-        event.kind === 'session_started' || event.kind === 'session_resumed' ||
-        (event.kind === 'cast_state' && event.cast_state === 'CONNECTED' && !!event.device_name)
-      // Wait until the Chrome window is actually embedded. Hiding it while it
-      // is still a top-level window drops the bridge connection.
-      if (deviceChosen && senderEmbedded) closeConnect()
-    })
-    return () => { active = false; void unlisten.then((off) => off()) }
-  }, [closeConnect, senderEmbedded])
-
-  const previousCastDeviceRef = useRef<string | null>(null)
-  useEffect(() => {
-    const previous = previousCastDeviceRef.current
-    previousCastDeviceRef.current = castDevice
-    if (!castDevice || previous || !connectOpen || !senderEmbedded) return
-    const timer = window.setTimeout(() => closeConnect(), 700)
-    return () => window.clearTimeout(timer)
-  }, [castDevice, connectOpen, senderEmbedded, closeConnect])
-
-  // A receiver may be selected while the sender window is still being embedded.
-  // As soon as embedding succeeds, close the picker panel without killing the
-  // Cast session.
-  useEffect(() => {
-    if (!senderEmbedded || !connectOpen || !castDevice) return
-    const timer = window.setTimeout(() => closeConnect(), 300)
-    return () => window.clearTimeout(timer)
-  }, [senderEmbedded, connectOpen, castDevice, closeConnect])
-
+  // The device menu is dismissed by ConnectPanel only after a receiver is
+  // selected in response to this open menu. A restored session or a periodic
+  // CONNECTED state must never close it before discovery can render devices.
   useEffect(() => {
     if (!connectOpen) return
     let disposed = false

@@ -34,6 +34,7 @@ export default function ConnectPanel({
   open, onClose, onNotice, playback, localPlaying,
 }: Props) {
   const panelRef = useRef<HTMLElement | null>(null)
+  const pendingRef = useRef<CastDevice | null>(null)
   const [pending, setPending] = useState<CastDevice | null>(null)
   const [connecting, setConnecting] = useState(false)
   const [failed, setFailed] = useState<string | null>(null)
@@ -47,16 +48,25 @@ export default function ConnectPanel({
   const connectedDevice = castDeviceName(playback)
   const receiverPlaying = connectedDevice && playback?.player_state === 'PLAYING'
 
+  useEffect(() => { pendingRef.current = pending }, [pending])
+
   useEffect(() => {
     if (!open) return
     let active = true
+    let closeTimer: number | undefined
     const unlisten = onCastPlaybackEvent((event) => {
       if (!active) return
       if (event.kind === 'session_started' || event.kind === 'session_resumed') {
+        const selectedHere = !!pendingRef.current
         setPending(null)
         setConnecting(false)
         setFailed(null)
         void refreshDevices()
+        // Only a receiver chosen from this menu may dismiss it. A restored
+        // session or a stale CONNECTED state must leave the list visible.
+        if (selectedHere) {
+          closeTimer = window.setTimeout(() => { if (active) onClose() }, 400)
+        }
       } else if (event.kind === 'session_start_failed') {
         setFailed(event.message ?? 'The receiver refused the connection.')
         setConnecting(false)
@@ -65,8 +75,12 @@ export default function ConnectPanel({
         setConnecting(false)
       }
     })
-    return () => { active = false; void unlisten.then((off) => off()) }
-  }, [open, refreshDevices])
+    return () => {
+      active = false
+      if (closeTimer !== undefined) window.clearTimeout(closeTimer)
+      void unlisten.then((off) => off())
+    }
+  }, [open, refreshDevices, onClose])
 
   useEffect(() => {
     if (!open) {
@@ -181,6 +195,13 @@ export default function ConnectPanel({
         {discoveryError && !failed && <div className="connect-error" role="alert"><AlertCircle size={14} /><span>Cast discovery is unavailable on this network.</span></div>}
 
         <div className="connect-list" role="list">
+          {!devices.length && isLoading && (
+            <div className="connect-empty">
+              <LoaderCircle size={20} className="spin-icon" />
+              <strong>Searching for Cast devices…</strong>
+              <span>Checking every local network adapter for Google Cast receivers.</span>
+            </div>
+          )}
           {!devices.length && !isLoading && (
             <div className="connect-empty">
               <Cast size={20} />

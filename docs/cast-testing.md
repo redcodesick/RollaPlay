@@ -44,7 +44,7 @@ These tests were executed in this packaged-app validation run: 60 passed, 0 fail
 
 ### Device discovery and session
 
-- [ ] 4. Device discovery: with the receiver idle on the same LAN, Connect lists its real friendly name from `_googlecast._tcp.local.` mDNS within ~10 s and **REFRESH DEVICES** issues a new live query. No mock devices or hardcoded names appear when the receiver is powered off. If Chrome's own dialog lists a receiver that mDNS missed, it is still visible there; Connect does not invent an entry.
+- [ ] 4. Device discovery: with the receiver idle on the same LAN, Connect shows "Searching for Cast devices…" and then lists its real friendly name from `_googlecast._tcp.local.` mDNS within ~4 s. The query runs on every active LAN adapter with both multicast and unicast-response hints; **REFRESH DEVICES** issues a new live query. A restored session or a status poll must not close the menu before the list renders. No mock devices or hardcoded names appear when the receiver is powered off. If Chrome's own dialog lists a receiver that mDNS missed, it is still visible there; Connect does not invent an entry.
 - [ ] 5. Xiaomi Mi Box connection: select the Mi Box; Chrome's own Cast picker opens next to the device menu — choose the same receiver there. The desktop UI pill then changes to the device name, the session state becomes "Session active", and the Mi Box shows the Default Media Receiver backdrop. Disconnect from the Mi Box side (standby/power off) → the desktop UI shows the session ended state.
 - [ ] 6. Reconnect: after a disconnect, cast the same or another video; the sender re-attaches without restarting Chrome.
 
