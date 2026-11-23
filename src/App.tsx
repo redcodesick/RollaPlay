@@ -25,7 +25,7 @@ import {
   Aperture, AlertCircle, Cast, Check, ChevronDown, CircleHelp, Clapperboard, Clock3,
   Film, FolderPlus, Gauge, HardDrive, History, House, Library,
   ListMusic, MoreHorizontal, Pause, Play, Plus, Search, Settings2, ShieldCheck,
-  SkipBack, SkipForward, SlidersHorizontal, Sparkles, Volume2, Wifi, X,
+  SkipBack, SkipForward, SlidersHorizontal, Sparkles, Volume2, VolumeX, Wifi, X,
 } from 'lucide-react'
 
 type View = 'Home' | 'Library' | 'Playlists' | 'Recently added' | 'History' | 'Settings'
@@ -271,6 +271,9 @@ function App() {
   const [selectedMediaIds, setSelectedMediaIds] = useState<number[]>([])
   const [notice, setNotice] = useState<{ message: string; level: Phase5Notification['level'] } | null>(null)
   const [senderPanelOpen, setSenderPanelOpen] = useState(false)
+  const [senderEmbedded, setSenderEmbedded] = useState(false)
+  const [playingOverride, setPlayingOverride] = useState<boolean | null>(null)
+  const [volumePreview, setVolumePreview] = useState<number | null>(null)
   const senderHostRef = useRef<HTMLDivElement | null>(null)
   const senderEmbeddedRef = useRef(false)
   const playlistReady = isPlaylistAvailable()
@@ -352,11 +355,25 @@ function App() {
   const castDevice = castDeviceName(castPlayback)
   const castTitle = castPlayback?.filename ?? null
   const castState = castPlayback?.player_state ?? null
+  // The receiver status is polled, so flip the button immediately on a click
+  // and drop the override once the receiver confirms the new state.
+  const isPlaying = playingOverride ?? castState === 'PLAYING'
   const castConnected = !!castDevice
   const castHasMedia = castTitle !== null && castPlayback?.media_file_id != null
   const castPosition = castPlayback?.position_seconds ?? 0
   const castDuration = castPlayback?.duration_seconds ?? 0
   const progressPercent = castDuration > 0 ? Math.min(100, Math.max(0, (castPosition / castDuration) * 100)) : 0
+  useEffect(() => {
+    if (playingOverride !== null && castState && (castState === 'PLAYING') === playingOverride) {
+      setPlayingOverride(null)
+    }
+  }, [castState, playingOverride])
+  useEffect(() => {
+    const receiverVolume = castPlayback?.volume_level
+    if (volumePreview !== null && receiverVolume !== null && receiverVolume !== undefined && Math.abs(receiverVolume - volumePreview) < 0.02) {
+      setVolumePreview(null)
+    }
+  }, [castPlayback?.volume_level, volumePreview])
   const pageTitle = useMemo(() => active === 'Home' ? 'Good evening' : active, [active])
   const openSetup = () => { setSetupStep(0); setSetupOpen(true) }
   const browse = () => { setSetupStep(1); setSetupOpen(true) }
@@ -377,12 +394,13 @@ function App() {
     if (!isCastAvailable()) return
     try {
       const rect = senderRect()
-      if (senderEmbeddedRef.current) {
-        await showCastSender(rect)
-      } else {
-        await embedCastSender(rect)
-        senderEmbeddedRef.current = true
-      }
+      // A relaunched Chrome process gets a new HWND; the result tells us whether
+      // it is still embedded so the next attempt can re-embed it.
+      const embedded = senderEmbeddedRef.current
+        ? await showCastSender(rect)
+        : await embedCastSender(rect)
+      senderEmbeddedRef.current = embedded
+      setSenderEmbedded(embedded)
     } catch (error) {
       showNotice(`Could not place the Cast sender in this window: ${String(error)}`, 'error')
     }
@@ -404,19 +422,30 @@ function App() {
       const deviceChosen =
         event.kind === 'session_started' || event.kind === 'session_resumed' ||
         (event.kind === 'cast_state' && event.cast_state === 'CONNECTED' && !!event.device_name)
-      if (deviceChosen) closeSenderPanel()
+      // Wait until the Chrome window is actually embedded. Hiding it while it
+      // is still a top-level window drops the bridge connection.
+      if (deviceChosen && senderEmbedded) closeSenderPanel()
     })
     return () => { active = false; void unlisten.then((off) => off()) }
-  }, [closeSenderPanel])
+  }, [closeSenderPanel, senderEmbedded])
 
   const previousCastDeviceRef = useRef<string | null>(null)
   useEffect(() => {
     const previous = previousCastDeviceRef.current
     previousCastDeviceRef.current = castDevice
-    if (!castDevice || previous || !senderPanelOpen) return
+    if (!castDevice || previous || !senderPanelOpen || !senderEmbedded) return
     const timer = window.setTimeout(() => closeSenderPanel(), 700)
     return () => window.clearTimeout(timer)
-  }, [castDevice, senderPanelOpen, closeSenderPanel])
+  }, [castDevice, senderPanelOpen, senderEmbedded, closeSenderPanel])
+
+  // A receiver may be selected while the sender window is still being embedded.
+  // As soon as embedding succeeds, close the picker panel without killing the
+  // Cast session.
+  useEffect(() => {
+    if (!senderEmbedded || !senderPanelOpen || !castDevice) return
+    const timer = window.setTimeout(() => closeSenderPanel(), 300)
+    return () => window.clearTimeout(timer)
+  }, [senderEmbedded, senderPanelOpen, castDevice, closeSenderPanel])
 
   useEffect(() => {
     if (!senderPanelOpen) return
@@ -455,8 +484,12 @@ function App() {
     }
   }, [castDevice, showNotice])
   const toggleCastPlay = () => {
-    if (!castReady) return
-    castSendControl('toggle_play').catch((error) => showNotice(String(error), 'error'))
+    if (!castReady || !castConnected || !castHasMedia) return
+    setPlayingOverride(!isPlaying)
+    castSendControl('toggle_play').catch((error) => {
+      setPlayingOverride(null)
+      showNotice(String(error), 'error')
+    })
   }
   const queueNext = () => {
     if (!playlistReady || !phase5Snapshot?.current_entry_id) return
@@ -501,7 +534,21 @@ function App() {
         <div ref={senderHostRef} className="sender-host" />
         <p className="sender-dock-note">Choose a receiver here. Hiding this panel keeps the Cast session connected.</p>
       </section>}
-      <div className="player-bar"><div className="player-track"><div className={`player-art ${castConnected && castHasMedia ? 'casting' : ''}`}><Cast size={17} /></div><div className="player-meta"><strong>{castTitle ?? 'Nothing is playing'}</strong><span>{castConnected && castHasMedia ? `${playerStateLabel(castState)} on ${castDevice}` : 'Pick a video and cast it to your TV'}</span></div></div><div className="player-controls"><button disabled={!playlistReady || !phase5Snapshot?.current_entry_id} onClick={queuePrevious} aria-label="Previous video" title={phase5Snapshot ? `Previous · restarts after ${phase5Snapshot.previous_restart_threshold_seconds}s; with Shuffle follows history` : 'Previous'}><SkipBack size={17} /></button><button className="player-play" disabled={!castReady || !castConnected || !castHasMedia} onClick={toggleCastPlay} aria-label={castState === 'PLAYING' ? 'Pause' : 'Play'}>{castState === 'PLAYING' ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}</button><button disabled={!playlistReady || !phase5Snapshot?.current_entry_id} onClick={queueNext} aria-label="Next video" title="Next video"><SkipForward size={17} /></button></div><div className="player-progress"><span>{formatSeconds(castPosition)}</span><div className="progress-track"><i style={{ width: `${progressPercent}%` }} /></div><span>{formatSeconds(castDuration)}</span></div><div className="player-device"><Cast size={17} className={castConnected ? 'casting' : ''} /><span>{castDevice ?? 'No Cast device'}</span><Volume2 size={17} className="volume-icon" /></div><div className="player-disclaimer"><span /> {castConnected && castHasMedia ? 'PLAYBACK CONTROLLED THROUGH GOOGLE CAST' : 'PLAYER READY WHEN CAST IS CONNECTED'}</div></div>
+      <div className="player-bar"><div className="player-track"><div className={`player-art ${castConnected && castHasMedia ? 'casting' : ''}`}><Cast size={17} /></div><div className="player-meta"><strong>{castTitle ?? 'Nothing is playing'}</strong><span>{castConnected && castHasMedia ? `${playerStateLabel(castState)} on ${castDevice}` : 'Pick a video and cast it to your TV'}</span></div></div><div className="player-controls"><button disabled={!playlistReady || !phase5Snapshot?.current_entry_id} onClick={queuePrevious} aria-label="Previous video" title={phase5Snapshot ? `Previous · restarts after ${phase5Snapshot.previous_restart_threshold_seconds}s; with Shuffle follows history` : 'Previous'}><SkipBack size={17} /></button><button className="player-play" disabled={!castReady || !castConnected || !castHasMedia} onClick={toggleCastPlay} aria-label={isPlaying ? 'Pause' : 'Play'}>{isPlaying ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}</button><button disabled={!playlistReady || !phase5Snapshot?.current_entry_id} onClick={queueNext} aria-label="Next video" title="Next video"><SkipForward size={17} /></button></div><div className="player-progress"><span>{formatSeconds(castPosition)}</span><div className="progress-track"><i style={{ width: `${progressPercent}%` }} /></div><span>{formatSeconds(castDuration)}</span></div><div className="player-device"><Cast size={17} className={castConnected ? 'casting' : ''} /><span>{castDevice ?? 'No Cast device'}</span><div className="player-volume"><button
+  aria-label={castPlayback?.muted ? 'Unmute' : 'Mute'}
+  disabled={!castReady || !castConnected}
+  onClick={() => void castSendControl('set_mute', { muted: !castPlayback?.muted }).catch((error) => showNotice(String(error), 'error'))}
+>{castPlayback?.muted ? <VolumeX size={15} /> : <Volume2 size={15} />}</button><input
+  type="range" min={0} max={1} step={0.01}
+  aria-label="Receiver volume"
+  disabled={!castReady || !castConnected}
+  value={volumePreview ?? castPlayback?.volume_level ?? 1}
+  onChange={(event) => {
+    const value = Number(event.target.value)
+    setVolumePreview(value)
+    void castSendControl('set_volume', { volume: value }).catch((error) => showNotice(String(error), 'error'))
+  }}
+/></div></div><div className="player-disclaimer"><span /> {castConnected && castHasMedia ? 'PLAYBACK CONTROLLED THROUGH GOOGLE CAST' : 'PLAYER READY WHEN CAST IS CONNECTED'}</div></div>
       {setupOpen && <SetupDialog
         step={setupStep}
         setStep={setSetupStep}

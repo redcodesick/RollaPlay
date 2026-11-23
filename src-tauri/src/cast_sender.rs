@@ -174,7 +174,14 @@ fn chrome_candidates() -> Vec<ChromeCandidate> {
 pub fn chrome_launch_command(executable: &Path, sender_url: &str) -> Command {
     let mut command = Command::new(executable);
     command.arg(format!("--app={sender_url}"));
-    command.args(["--new-window", "--no-first-run", "--no-default-browser-check"]);
+    // A small initial window avoids a large Chrome frame flashing on screen
+    // before the sender is re-parented into the in-app panel.
+    command.args([
+        "--new-window",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--window-size=480,340",
+    ]);
     command
 }
 
@@ -687,6 +694,9 @@ struct CastSenderManagerInner {
     relaunch_attempts: RwLock<u32>,
     last_launch_attempt_epoch_ms: RwLock<Option<u64>>,
     shutdown_started: AtomicBool,
+    /// Set whenever the app intentionally hides the sender panel. While it is
+    /// set the watcher must not resurrect Chrome as a floating top-level window.
+    relaunch_suppressed: AtomicBool,
 }
 
 impl Clone for CastSenderManager {
@@ -714,6 +724,7 @@ impl CastSenderManager {
                 relaunch_attempts: RwLock::new(0),
                 last_launch_attempt_epoch_ms: RwLock::new(None),
                 shutdown_started: AtomicBool::new(false),
+                relaunch_suppressed: AtomicBool::new(false),
             }),
         }
     }
@@ -823,13 +834,29 @@ impl CastSenderManager {
 
     pub fn send_command(&self, command: Value) -> Result<(), String> {
         if self.inner.sender_connections.load(Ordering::SeqCst) == 0 {
-            return Err("The Cast sender window is not connected. Launch it from the Cast panel.".to_string());
+            return Err("The Cast sender page disconnected. Playback will reopen it inside this window; try again.".to_string());
         }
         self.inner
             .broadcast
             .send(command.to_string())
-            .map_err(|_| "The Cast sender window is not connected. Launch it from the Cast panel.".to_string())
+            .map_err(|_| "The Cast sender page disconnected. Playback will reopen it inside this window; try again.".to_string())
             .map(|_| ())
+    }
+
+    /// Playback must never create a visible Chrome window by itself. If the
+    /// user hid the sender and its page is not connected, report the problem
+    /// instead of spawning a floating window over the app.
+    pub async fn ensure_for_playback(&self) -> Result<(), String> {
+        if self.inner.sender_connections.load(Ordering::SeqCst) > 0 {
+            return Ok(());
+        }
+        // The page disconnected while the panel was hidden. Playback must still
+        // work: reopen the sender inside the app (never as a floating window)
+        // so the official SDK can resume the existing receiver session.
+        self.clear_relaunch_suppression();
+        self.launch().await?;
+        let _ = self.inner.app.emit("cast-sender-launch-requested", ());
+        Ok(())
     }
 
     /// Idempotently prepares the sender: detects Chrome, starts the loopback
@@ -839,6 +866,9 @@ impl CastSenderManager {
         if self.inner.shutdown_started.load(Ordering::SeqCst) {
             return Err("The application is shutting down".to_string());
         }
+        // This is also called by automatic playback. It must NOT clear the
+        // "hidden on purpose" flag: that would let the watcher resurrect a
+        // floating Chrome window every time a video is played.
         let detection = detect_chrome();
         if !detection.installed {
             let message = "Google Chrome is not installed on this PC. Install Chrome from https://www.google.com/chrome and try again.";
@@ -962,6 +992,11 @@ impl CastSenderManager {
             };
             let session_active = self.is_cast_session_active();
             if child_exited {
+                if self.relaunch_is_suppressed() {
+                    self.set_window_state("closed");
+                    let _ = self.inner.app.emit("cast-sender-status-changed", self.status());
+                    return;
+                }
                 if connected || launch_age < PAGE_CONNECT_GRACE {
                     // The launcher process exits when Chrome hands the window
                     // to an existing browser instance; only act once the grace
@@ -986,6 +1021,11 @@ impl CastSenderManager {
             // sender page as crashed and relaunch.
             if let Some(since) = unconnected_since {
                 if ever_connected && since.elapsed() > PAGE_DISCONNECT_GRACE {
+                    if self.relaunch_is_suppressed() {
+                        self.set_window_state("closed");
+                        let _ = self.inner.app.emit("cast-sender-status-changed", self.status());
+                        return;
+                    }
                     if session_active && self.current_relaunch_attempts() < MAX_RELAUNCH_ATTEMPTS {
                         self.relaunch_chrome().await;
                         unconnected_since = None;
@@ -1048,6 +1088,9 @@ impl CastSenderManager {
             self.record_sender_error(&message);
             self.set_window_state("failed");
         }
+        // Do not force the in-app panel open here: auto-recovery must stay
+        // invisible when the user intentionally hid the sender. The next
+        // explicit "Connect your TV" click re-embeds the new window.
     }
 
     async fn current_bridge_port(&self) -> Option<u16> {
@@ -1142,6 +1185,21 @@ impl CastSenderManager {
         if let Ok(mut current) = self.inner.chrome_window_state.write() {
             *current = state.to_string();
         }
+    }
+
+    /// The app hid the sender panel on purpose; a closed Chrome window is not
+    /// a crash and must not be relaunched behind the user's back.
+    pub fn suppress_relaunch(&self) {
+        self.inner.relaunch_suppressed.store(true, Ordering::SeqCst);
+    }
+
+    /// Explicitly opening/embedding the sender re-enables crash recovery.
+    pub fn clear_relaunch_suppression(&self) {
+        self.inner.relaunch_suppressed.store(false, Ordering::SeqCst);
+    }
+
+    fn relaunch_is_suppressed(&self) -> bool {
+        self.inner.relaunch_suppressed.load(Ordering::SeqCst)
     }
 
     fn current_relaunch_attempts(&self) -> u32 {

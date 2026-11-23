@@ -29,7 +29,7 @@ These tests were executed in this packaged-app validation run: 57 passed, 0 fail
 - Default Media Receiver container gate: mp4/m4v/webm/mkv allowed, avi/wmv/3gp/mpeg rejected.
 - HTTP-level receiver auth: `GET /media/{id}?cast_token=…` without bearer returns 200, ranged `Range: bytes=2-5` returns 206 with exact `Content-Range`, other media ids return 401, duplicated query tokens return 401.
 - Chrome candidate resolution: first existing executable wins, missing candidates skipped.
-- Chrome launch command: `--app=http://127.0.0.1:PORT/` plus `--new-window`, `--no-first-run`, `--no-default-browser-check`.
+- Chrome launch command: `--app=http://127.0.0.1:PORT/` plus `--new-window`, `--no-first-run`, `--no-default-browser-check`, `--window-size=480,340`.
 - Sender page assets: official `cast_sender.js` framework referenced, `DEFAULT_MEDIA_RECEIVER_APP_ID`, no `cast_token` string anywhere in page/script.
 - Sender event clamping: oversized/malformed strings truncated, non-numeric values dropped.
 - Playback persistence: `playback_state` keeps the current media, history row records watched seconds, disconnect finalizes progress without clearing the reference, restart restores the last Cast media.
@@ -60,7 +60,7 @@ These tests were executed in this packaged-app validation run: 57 passed, 0 fail
 
 - [ ] 12. Pause / resume: pause from the desktop UI and from the sender window; the Mi Box pauses; resume works from both; the desktop progress bar follows the receiver (event-driven, no timers).
 - [ ] 13. Seek: drag the desktop seek slider and the sender window slider; the receiver jumps to the position; position/duration labels stay consistent with the receiver.
-- [ ] 14. Volume / mute: change the desktop volume slider and mute toggle; the Mi Box volume changes audibly; the sender window slider follows receiver events; volume changes made with the Mi Box remote appear in the desktop UI.
+- [ ] 14. Volume / mute: change the new desktop player-bar volume slider and mute toggle; the Mi Box volume changes audibly; the sender window slider follows receiver events; volume changes made with the Mi Box remote appear in the desktop UI.
 - [ ] 15. Stop: press Stop; the Mi Box leaves the video, the streaming grant is revoked, and streaming diagnostics show no lingering active stream for that media id.
 - [ ] 16. Disconnect: press Disconnect in the desktop UI; the Mi Box returns to the receiver backdrop; the library, the "last cast media" reference, and the progress are retained.
 
@@ -68,7 +68,7 @@ These tests were executed in this packaged-app validation run: 57 passed, 0 fail
 
 - [ ] 17. Receiver disconnected mid-playback: unplug the Mi Box or leave the session; the desktop UI keeps the playlist/library state and shows the failure honestly; the sender window reports the session ended; a subsequent cast works.
 - [ ] 18. Wi-Fi interruption: stream a long file and drop Wi-Fi on the tablet or the Mi Box for ~20 s; playback stalls and then fails or resumes without the app losing state; diagnostics record the interrupted stream; after the network returns, casting works again (the media server rebinds on adapter change as validated in Phase 3).
-- [ ] 19. Chrome crash / sender recovery: kill `chrome.exe` from Task Manager during playback; within the disconnect grace window the app relaunches the sender window automatically (up to three attempts) while a Cast session was active; the Cast panel shows the recovery attempt counter. Close the sender window manually with nothing playing → no relaunch, status "closed".
+- [ ] 19. Chrome crash / sender recovery: kill `chrome.exe` from Task Manager during playback; within the disconnect grace window the app relaunches the sender automatically (up to three attempts) while a Cast session was active; the Cast panel shows the recovery attempt counter. With the panel intentionally hidden, the watcher must **not** resurrect a floating window; casting again must reopen the sender inside the app and resume the session without asking for the device again. Close the sender window manually with nothing playing → no relaunch, status "closed".
 - [ ] 20. Application restart while casting: close the Windows app during playback; the Mi Box eventually drops the session; reopen the app — the Cast panel restores "last cast media" from `playback_state` and the library/playlist data are intact.
 - [ ] 21. Sender page crash (renderer): close the sender window but keep Chrome running, then cast; the app relaunches the sender page and playback proceeds.
 

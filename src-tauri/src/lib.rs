@@ -1214,6 +1214,9 @@ async fn launch_cast_sender(
     window: tauri::Window,
     cast: State<'_, CastSenderManager>,
 ) -> Result<CastSenderStatus, String> {
+    // Only an explicit user action may undo an intentional hide. Automatic
+    // playback calls launch() directly and must keep the panel hidden.
+    cast.clear_relaunch_suppression();
     let status = cast.launch().await?;
     // Every launch path (player bar, wizard, Cast panel) asks the app shell to
     // show the in-window sender panel so the Chrome window is never left alone.
@@ -1232,33 +1235,52 @@ fn app_window_handle(_window: &tauri::Window) -> Result<isize, String> {
 }
 
 /// Re-parents the managed Chrome sender window into the app's sender panel.
+/// Looking up and resizing Chrome's window can take seconds, so it must run on
+/// a blocking thread: running it on the UI thread made the app "Not Responding".
 #[tauri::command]
-fn embed_cast_sender(
+async fn embed_cast_sender(
     window: tauri::Window,
     cast: State<'_, CastSenderManager>,
     rect: sender_embed::HostRect,
 ) -> Result<bool, String> {
     let handle = app_window_handle(&window)?;
-    sender_embed::embed(handle, cast.sender_pid(), rect)?;
-    Ok(sender_embed::embedded_window_is_valid())
+    let pid = cast.sender_pid();
+    cast.clear_relaunch_suppression();
+    tokio::task::spawn_blocking(move || {
+        sender_embed::embed(handle, pid, rect)?;
+        Ok(sender_embed::embedded_window_is_valid())
+    })
+    .await
+    .map_err(|error| format!("Could not embed the Cast sender ({error})."))?
 }
 
 #[tauri::command]
-fn show_cast_sender(window: tauri::Window, rect: sender_embed::HostRect) -> Result<bool, String> {
+async fn show_cast_sender(window: tauri::Window, rect: sender_embed::HostRect) -> Result<bool, String> {
     let handle = app_window_handle(&window)?;
-    sender_embed::show_embedded(handle, rect)?;
-    Ok(sender_embed::embedded_window_is_valid())
+    tokio::task::spawn_blocking(move || {
+        sender_embed::show_embedded(handle, rect)?;
+        Ok(sender_embed::embedded_window_is_valid())
+    })
+    .await
+    .map_err(|error| format!("Could not show the Cast sender ({error})."))?
 }
 
 #[tauri::command]
-fn move_cast_sender(window: tauri::Window, rect: sender_embed::HostRect) -> Result<(), String> {
+async fn move_cast_sender(window: tauri::Window, rect: sender_embed::HostRect) -> Result<(), String> {
     let handle = app_window_handle(&window)?;
-    sender_embed::move_embedded(handle, rect)
+    tokio::task::spawn_blocking(move || sender_embed::move_embedded(handle, rect))
+        .await
+        .map_err(|error| format!("Could not reposition the Cast sender ({error})."))?
 }
 
 #[tauri::command]
-fn hide_cast_sender() -> Result<(), String> {
-    sender_embed::hide_embedded()
+async fn hide_cast_sender(cast: State<'_, CastSenderManager>) -> Result<(), String> {
+    // The panel was hidden on purpose (receiver chosen, or user clicked X).
+    // Suppress crash-relaunch so a floating Chrome window never reappears.
+    cast.suppress_relaunch();
+    tokio::task::spawn_blocking(sender_embed::hide_embedded)
+        .await
+        .map_err(|error| format!("Could not hide the Cast sender ({error})."))?
 }
 
 #[tauri::command]
@@ -1314,7 +1336,7 @@ async fn cast_load_media(
             );
         }
     }
-    cast.launch().await?;
+    cast.ensure_for_playback().await?;
     let scoped = server.create_cast_stream_url(media_file_id).await?;
     let probe = server.verify_cast_stream_url(media_file_id).await;
     let probe_ok = probe.reachable;

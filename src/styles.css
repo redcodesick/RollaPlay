@@ -85,6 +85,12 @@
 .device-pill.connected svg{color:#a8d0b6}
 .player-art.casting{border-color:rgba(104,188,143,.3);color:#a8d0b6}
 .player-device svg.casting{color:#a8d0b6}
+.player-volume{display:flex;align-items:center;gap:6px;margin-left:4px}
+.player-volume button{width:24px;height:24px;display:grid;place-items:center;border:0;border-radius:5px;background:transparent;color:#9c99a5;cursor:pointer}
+.player-volume button:hover:not(:disabled){color:#e6def7;background:#1b1922}
+.player-volume button:disabled{opacity:.4}
+.player-volume input{width:66px;height:3px;accent-color:#b29aff;cursor:pointer}
+.player-volume input:disabled{opacity:.4;cursor:not-allowed}
 @media(max-width:1000px){.cast-info-grid{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}.cast-section-heading{flex-direction:column;align-items:flex-start;gap:10px}}
 @media(max-width:760px){.cast-controls{grid-template-columns:repeat(2,1fr)}.cast-diagnostic-row{flex-wrap:wrap}.cast-now-track{flex-wrap:wrap}.cast-token-note{margin-left:0}.cast-controls-actions{width:100%;flex-wrap:wrap}.cast-control{min-height:44px;font-size:9.5px}.cast-panel{gap:14px;margin-top:22px}}
 

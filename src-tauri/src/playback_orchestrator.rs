@@ -129,7 +129,7 @@ impl PlaybackOrchestrator {
                 );
             }
         }
-        self.cast.launch().await?;
+        self.cast.ensure_for_playback().await?;
         let scoped = self.server.create_cast_stream_url(media_file_id).await?;
         let probe = self.server.verify_cast_stream_url(media_file_id).await;
         let probe_ok = probe.reachable;

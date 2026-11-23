@@ -52,8 +52,10 @@ export default function CastPanel() {
   const [errorMessage, setErrorMessage] = useState('')
   const [seekPreview, setSeekPreview] = useState<number | null>(null)
   const [volumePreview, setVolumePreview] = useState<number | null>(null)
+  const [playingOverride, setPlayingOverride] = useState<boolean | null>(null)
   const seekDragging = useRef(false)
   const volumeDragging = useRef(false)
+  const volumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { data: status, mutate: refreshStatus } = useSWR(
     isDesktop ? 'cast-sender-status' : null,
     getCastSenderStatus,
@@ -97,7 +99,7 @@ export default function CastPanel() {
     }
   }, [castReady, refreshDiagnostics, refreshPlayback, refreshStatus])
 
-  async function runAction(action: () => Promise<unknown>, successText?: string) {
+  async function runAction(action: () => Promise<unknown>, successText?: string): Promise<boolean> {
     setIsWorking(true)
     setErrorMessage('')
     setMessage('')
@@ -105,11 +107,20 @@ export default function CastPanel() {
       await action()
       await Promise.all([refreshStatus(), refreshDiagnostics(), refreshPlayback()])
       if (successText) setMessage(successText)
+      return true
     } catch (error) {
       setErrorMessage(typeof error === 'string' ? error : error instanceof Error ? error.message : String(error))
+      return false
     } finally {
       setIsWorking(false)
     }
+  }
+
+  async function togglePlay() {
+    const next = !playing
+    setPlayingOverride(next)
+    const ok = await runAction(() => castSendControl('toggle_play'))
+    if (!ok) setPlayingOverride(null)
   }
 
   async function commitSeek() {
@@ -120,19 +131,37 @@ export default function CastPanel() {
     await runAction(() => castSendControl('seek', { positionSeconds: target }))
   }
 
-  async function commitVolume() {
+  async function commitVolume(target?: number) {
     volumeDragging.current = false
-    const target = volumePreview
-    setVolumePreview(null)
-    if (target === null || target === undefined) return
-    await runAction(() => castSendControl('set_volume', { volume: target }))
+    if (volumeTimer.current) {
+      clearTimeout(volumeTimer.current)
+      volumeTimer.current = null
+    }
+    const value = target ?? volumePreview
+    if (value === null || value === undefined) return
+    await runAction(() => castSendControl('set_volume', { volume: value }))
   }
+
+  useEffect(() => () => {
+    if (volumeTimer.current) clearTimeout(volumeTimer.current)
+  }, [])
 
   const snapshot = playback ?? ({ updated_at_epoch_ms: 0 } as CastPlaybackSnapshot)
   const connectedDevice = castDeviceName(snapshot)
   const connected = !!connectedDevice
   const hasMedia = snapshot.media_file_id !== null && snapshot.media_file_id !== undefined
-  const playing = snapshot.player_state === 'PLAYING'
+  const playing = playingOverride ?? snapshot.player_state === 'PLAYING'
+  useEffect(() => {
+    if (playingOverride !== null && snapshot.player_state && (snapshot.player_state === 'PLAYING') === playingOverride) {
+      setPlayingOverride(null)
+    }
+  }, [snapshot.player_state, playingOverride])
+  useEffect(() => {
+    const receiverVolume = snapshot.volume_level
+    if (volumePreview !== null && receiverVolume !== null && receiverVolume !== undefined && Math.abs(receiverVolume - volumePreview) < 0.02) {
+      setVolumePreview(null)
+    }
+  }, [snapshot.volume_level, volumePreview])
   const position = seekPreview ?? snapshot.position_seconds ?? 0
   const duration = snapshot.duration_seconds ?? 0
   const hint = discoveryHint(snapshot, status)
@@ -207,7 +236,7 @@ export default function CastPanel() {
           <div className="cast-times"><span>{formatSeconds(position)}</span><span>{formatSeconds(duration)}</span></div>
         </div>
         <div className="cast-controls">
-          <button className="cast-control primary" onClick={() => runAction(() => castSendControl('toggle_play'))} disabled={!hasMedia || !connected || !isDesktop} aria-label={playing ? 'Pause' : 'Play'}>
+          <button className="cast-control primary" onClick={() => void togglePlay()} disabled={!hasMedia || !connected || !isDesktop} aria-label={playing ? 'Pause' : 'Play'}>
             {playing ? <Pause size={16} /> : <Play size={16} fill="currentColor" />}
             {playing ? 'Pause' : 'Play'}
           </button>
@@ -233,9 +262,14 @@ export default function CastPanel() {
             aria-label="Receiver volume"
             disabled={!connected || !isDesktop}
             onPointerDown={() => { volumeDragging.current = true }}
-            onChange={(event) => setVolumePreview(Number(event.target.value))}
-            onPointerUp={commitVolume}
-            onTouchEnd={commitVolume}
+            onChange={(event) => {
+              const value = Number(event.target.value)
+              setVolumePreview(value)
+              if (volumeTimer.current) clearTimeout(volumeTimer.current)
+              volumeTimer.current = setTimeout(() => { void commitVolume(value) }, 120)
+            }}
+            onPointerUp={() => { void commitVolume() }}
+            onTouchEnd={() => { void commitVolume() }}
             onKeyUp={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') void commitVolume() }}
           />
         </div>

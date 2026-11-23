@@ -136,7 +136,11 @@ pub fn embed(top_level_hwnd: isize, pid: Option<u32>, rect: HostRect) -> Result<
     let top_level = HWND(top_level_hwnd as *mut std::ffi::c_void);
     let mut sender = None;
     for _ in 0..25 {
-        sender = find_sender_window(pid);
+        // Chrome often hands the app window to an already-running browser
+        // process, so the window PID can differ from the launcher PID. Prefer
+        // the launcher PID when it matches, but always fall back to the window
+        // title so a real sender window is never left floating over the app.
+        sender = find_sender_window(pid).or_else(|| find_sender_window(None));
         if sender.is_some() {
             break;
         }
@@ -235,6 +239,9 @@ pub fn move_embedded(_top_level_hwnd: isize, _rect: HostRect) -> Result<(), Stri
 #[cfg(windows)]
 pub fn hide_embedded() -> Result<(), String> {
     let Some(handle) = stored_window() else {
+        // Never hide a top-level sender window here. During a cold launch the
+        // window exists before it has been embedded; hiding it would drop the
+        // bridge connection and make `launch()` time out.
         return Ok(());
     };
     let hwnd = HWND(handle as *mut std::ffi::c_void);
