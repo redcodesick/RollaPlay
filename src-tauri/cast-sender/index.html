@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Cast Sender — Windows Media Station</title>
+    <!-- The availability hook must exist before the official framework loads. -->
+    <script src="/sender.js"></script>
+    <script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0c0f;
+        --panel: #111217;
+        --line: rgba(255, 255, 255, 0.075);
+        --muted: #92929c;
+        --text: #f4f3f8;
+        --accent: #a88aff;
+        --ok: #7fd6a4;
+        --warn: #ffca7a;
+        --bad: #ff8f8f;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "DM Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 18px;
+      }
+      .card {
+        width: 100%;
+        max-width: 430px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 22px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .brand { display: flex; align-items: center; gap: 11px; }
+      .brand-mark {
+        width: 33px; height: 33px; display: grid; place-items: center;
+        color: #d6c6ff; background: linear-gradient(145deg, #322551, #191621);
+        border: 1px solid #574578; border-radius: 10px; font-size: 15px;
+      }
+      .brand-name { font-weight: 800; font-size: 11px; letter-spacing: 1.2px; line-height: 1.5; }
+      .brand-name span { display: block; font-size: 9px; letter-spacing: 2.1px; color: var(--muted); }
+      .eyebrow { font-size: 9px; font-weight: 700; letter-spacing: 1.8px; color: #777781; }
+      h1 { font-size: 19px; margin: 2px 0 0; }
+      .state-row { display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--muted); margin-top: 5px; }
+      .dot { width: 9px; height: 9px; border-radius: 999px; background: #5c5c66; flex: none; }
+      .dot.ok { background: var(--ok); }
+      .dot.warn { background: var(--warn); }
+      .dot.bad { background: var(--bad); }
+      .device-button {
+        min-height: 52px; border-radius: 12px; border: 1px solid #574578; cursor: pointer;
+        background: linear-gradient(145deg, #322551, #191621); color: #eee9fb;
+        font: 700 13px/1.4 inherit; display: flex; align-items: center; justify-content: center; gap: 10px;
+        padding: 12px;
+      }
+      .device-button:disabled { opacity: 0.55; cursor: not-allowed; }
+      .device-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+      .panel { border: 1px solid var(--line); border-radius: 12px; padding: 13px; display: grid; gap: 9px; }
+      .panel-title { font-size: 10px; font-weight: 700; letter-spacing: 1.6px; color: #777781; }
+      .kv { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; }
+      .kv span { color: var(--muted); }
+      .kv b { font-weight: 600; text-align: right; overflow-wrap: anywhere; }
+      .controls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+      .controls button {
+        min-height: 46px; border-radius: 10px; border: 1px solid var(--line); background: #17171d;
+        color: #eae9ef; font: 600 12.5px inherit; cursor: pointer;
+      }
+      .controls button:hover:not(:disabled) { background: #1f1f26; }
+      .controls button:disabled { opacity: 0.45; cursor: not-allowed; }
+      .controls .primary { border-color: #574578; background: linear-gradient(145deg, #322551, #191621); color: #eee9fb; }
+      .slider-row { display: grid; gap: 5px; font-size: 11px; color: var(--muted); }
+      .slider-row input[type="range"] { width: 100%; accent-color: var(--accent); min-height: 24px; }
+      .times { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+      .message { font-size: 12px; border-radius: 10px; padding: 10px 12px; border: 1px solid var(--line); overflow-wrap: anywhere; }
+      .message.error { border-color: rgba(255, 143, 143, 0.4); color: var(--bad); background: rgba(255, 143, 143, 0.08); }
+      .message.info { color: var(--muted); background: #141419; }
+      .footnote { font-size: 10px; color: #777781; letter-spacing: 0.4px; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main class="card" aria-label="Cast sender">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">&#9654;&#xFE0E;</span>
+        <div class="brand-name">WINDOWS MEDIA<span>CAST SENDER</span></div>
+      </div>
+
+      <div>
+        <div class="eyebrow">GOOGLE CAST</div>
+        <h1 id="headline">Choose a Cast device</h1>
+        <div class="state-row"><span class="dot" id="cast-dot"></span><span id="cast-state-text">Starting the Cast framework…</span></div>
+        <div class="state-row"><span class="dot" id="session-dot"></span><span id="session-state-text">No session</span></div>
+      </div>
+
+      <button class="device-button" id="pick-device" disabled>
+        <span aria-hidden="true">&#128269;&#xFE0E;</span> Choose a device on this network
+      </button>
+
+      <div class="panel">
+        <div class="panel-title">CONNECTED RECEIVER</div>
+        <div class="kv"><span>Device</span><b id="device-name">None</b></div>
+        <div class="kv"><span>Receiver type</span><b>Default Media Receiver</b></div>
+        <div class="kv"><span>Framework</span><b id="framework-state">Waiting for the Cast framework</b></div>
+      </div>
+
+      <div class="panel" id="now-playing" hidden>
+        <div class="panel-title">NOW PLAYING</div>
+        <div class="kv"><span>Video</span><b id="media-title">—</b></div>
+        <div class="slider-row">
+          <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek position" />
+          <div class="times"><span id="time-current">0:00</span><span id="time-total">0:00</span></div>
+        </div>
+        <div class="controls">
+          <button class="primary" id="play-pause" aria-label="Play or pause">Play / Pause</button>
+          <button id="stop" aria-label="Stop">Stop</button>
+          <button id="mute" aria-label="Mute or unmute">Mute</button>
+          <button id="disconnect" aria-label="Disconnect">Leave</button>
+        </div>
+        <div class="slider-row">
+          <label for="volume">Volume</label>
+          <input id="volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Receiver volume" />
+        </div>
+      </div>
+
+      <div class="message info" id="status-message" role="status">
+        This window is the managed Cast sender for Windows Media Station. Select a video in the desktop app and it will start here automatically.
+      </div>
+
+      <div class="footnote">SENDER ORIGIN http://127.0.0.1 &#183; OFFICIAL CAST WEB SDK &#183; LOCAL ONLY</div>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,13 @@
+pmOnFail: ignore
+
+minimumReleaseAgeExclude:
+  - '@next/*'
+  - next
+
+allowBuilds:
+  esbuild: true
+nodeLinker: hoisted
+packageImportMethod: copy
+
+# This workspace lives on an exFAT drive, which cannot create symlinks.
+# hoisted + copy keeps pnpm working without a symlink-based store.
