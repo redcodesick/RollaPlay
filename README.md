@@ -5,7 +5,7 @@ RollaPlay (the RockNRolla Media Station) is a local-first Tauri 2 desktop app fo
 ## What you get
 
 - **Local library:** add approved folders, scan incrementally, browse a poster grid with Windows Shell thumbnails, search, sort, and play with a single click.
-- **Playlists:** create and edit playlists, import/export M3U, M3U8 and WPL, and browse Spotify/YouTube-style cards with track tables. Playing a whole playlist advances only when the receiver reports a real `IdleReason.FINISHED`.
+- **Playlists:** create and edit playlists, import/export M3U, M3U8 and WPL, add videos from a folder with one click, and browse Spotify/YouTube-style cards with track tables. Playing a whole playlist advances only when the receiver reports a real `IdleReason.FINISHED`.
 - **Playback queue:** reorder by dragging the grip or with the arrow buttons, use `Play next in queue` on any row, and clear watch history without disturbing playlists or the queue.
 - **Cast:** real `_googlecast._tcp.local.` discovery fills an app-owned device menu under the Cast pill. Selecting a receiver opens Chrome's native Cast picker from a fully hidden embedded sender. There is no floating sender window and no "This PC" receiver.
 - **Downloader:** paste a YouTube video or playlist link, pick a folder, and get Cast-friendly H.264/AAC MP4 files that are indexed into the library automatically. Optional HD mode fetches FFmpeg on first use.
@@ -81,4 +81,4 @@ RollaPlay is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) 
 
 ## Validation status
 
-On Windows the frontend build, Rust tests (82 passed, 1 ignored), and packaged NSIS/MSI builds have all been verified; recorded results are in [docs/windows-validation.md](docs/windows-validation.md). The user validated LAN Chromecast playback, receiver controls and automatic `IdleReason.FINISHED` playlist advance on 2026-11-23 with the rebuilt installer. Unsupported AV1/VP9 sources are addressed by the in-app Downloader, which saves H.264/AAC MP4 copies. Hardware results are user-reported without per-item logs or screenshots.
+On Windows the frontend build, Rust tests (82 passed, 1 ignored), and packaged NSIS/MSI builds have all been verified; recorded results are in [docs/windows-validation.md](docs/windows-validation.md). The user validated LAN Chromecast playback, receiver controls and automatic `IdleReason.FINISHED` playlist advance on 2026-11-23 with the rebuilt installer. Unsupported AV1/VP9 sources are addressed by the in-app Downloader, which saves H.264/AAC MP4 copies. The user also confirmed that a public YouTube download now completes with the installed tools and the MP4 files appear in the chosen folder. Hardware/Cast results are user-reported without per-item logs or screenshots.

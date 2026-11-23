@@ -188,7 +188,9 @@ Build/test results for the current run: `cargo test --manifest-path src-tauri/Ca
 - [x] Progress listeners are attached once per Downloader view and each row renders a real percentage bar; UI events are recorded in diagnostics as safe index/phase/percent fields.
 - [x] Both tools are checked with `--version` / `-version` when the Downloader opens and again before every download. A file that exists but does not answer is reported as "not responding", and missing or broken tools are installed automatically with WinGet (GitHub fallback), without needing a manual install first.
 - [x] Tool discovery prefers the newest matching executable in WinGet's versioned package folders, so an old leftover shim cannot be selected after an upgrade. Rust unit tests cover the ready/missing/broken hint wording and error sanitising.
-- [ ] On a fresh install, tick HD, let FFmpeg install with WinGet, paste a public playlist link, choose a folder, then confirm every video appears in Recently added and plays with picture on the receiver. A private link must show the private-link explanation instead of a generic failure.
+- [x] User-reported: after installing the tools with WinGet, a public YouTube download completes and the MP4 files appear in the chosen folder. The earlier silent "Downloading…" failure no longer occurs.
+- [x] An empty playlist now has an **Add videos from folder** action that opens the native folder picker, adds and scans the folders, and adds the newly indexed videos to that playlist.
+- [ ] On a fresh install, tick HD, paste a public playlist link, choose a folder, then confirm every video appears in Recently added and plays with picture on the receiver. A private link must still show the private-link explanation instead of a generic failure.
 
 ## Run notes
 

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import useSWR, { useSWRConfig } from 'swr'
 import { convertFileSrc } from '@tauri-apps/api/core'
+import { open } from '@tauri-apps/plugin-dialog'
 import {
-  AlertCircle, Check, Clock3, Disc3, Download, GripVertical, LoaderCircle,
+  AlertCircle, Check, Clock3, Disc3, Download, FolderPlus, GripVertical, LoaderCircle,
   MoreHorizontal, Music2, Play, Plus, RefreshCw, SkipForward, Trash2, Upload, X,
 } from 'lucide-react'
 import {
@@ -12,8 +13,8 @@ import {
   reorderPlaylistItem, selectPlaylist, type PlaybackSnapshot, type PlaylistFileFormat,
   type PlaylistItem, type PlaylistSummary,
 } from '../playlist'
-import { debugLog, friendlyError } from '../diagnostics'
-import { getMediaFiles } from '../media'
+import { debugLog, friendlyError, invokeTracked } from '../diagnostics'
+import { getMediaFiles, type MediaDirectory, type MediaFile, type ScanResult } from '../media'
 
 const coverTones = ['red', 'amber', 'paper', 'steel']
 
@@ -46,6 +47,7 @@ export default function PlaylistManager({
   const [renameValue, setRenameValue] = useState('')
   const [dragItem, setDragItem] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
+  const [indexingVideos, setIndexingVideos] = useState(false)
 
   useEffect(() => { selectedPlaylistRef.current = selectedPlaylist }, [selectedPlaylist])
 
@@ -132,6 +134,65 @@ export default function PlaylistManager({
       preferredRefreshRef.current = null
     }
   }, [onNotice, refresh])
+
+  // Lets an empty playlist add real videos directly: pick folders, index them,
+  // then add the freshly indexed files to the playlist that is open.
+  const addVideosFromFolder = useCallback(async () => {
+    if (!available) return
+    debugLog('playlists', 'button_click', { control: 'add_videos_from_folder' })
+    setIndexingVideos(true)
+    onNotice('Choose the folders with your videos…', 'info')
+    try {
+      const selection = await open({ directory: true, multiple: true, title: 'Choose folders containing videos' })
+      if (!selection || (Array.isArray(selection) && selection.length === 0)) {
+        onNotice('Folder selection cancelled.', 'info')
+        return
+      }
+      const paths = Array.isArray(selection) ? selection : [selection]
+      onNotice(`Indexing ${paths.length} folder${paths.length === 1 ? '' : 's'}…`, 'info')
+      const directoryIds: number[] = []
+      for (const path of paths) {
+        const directory = await invokeTracked<MediaDirectory>('add_media_directory', { path }, 'playlists')
+        directoryIds.push(directory.id)
+        const result = await invokeTracked<ScanResult>('scan_media_directory', { directoryId: directory.id }, 'playlists')
+        debugLog('playlists', 'folder_indexed', { directoryId: directory.id, filesIndexed: result.files_indexed })
+      }
+      await Promise.all([
+        mutateGlobal('media-directories'),
+        mutateGlobal((key: unknown) => Array.isArray(key) && key[0] === 'media-files'),
+        mutateGlobal((key: unknown) => Array.isArray(key) && key[0] === 'playlist-covers'),
+      ])
+      const files = await invokeTracked<MediaFile[]>('list_media_files', {
+        search: null, extension: null, sortBy: 'date',
+      }, 'playlists')
+      const indexed = files.filter((file) =>
+        directoryIds.includes(file.directory_id) && file.availability_state === 'available')
+      const existing = new Set(items.map((item) => item.media_file_id))
+      const additions = indexed.map((file) => file.id).filter((id) => !existing.has(id))
+
+      if (selectedPlaylist != null && additions.length) {
+        preferredRefreshRef.current = selectedPlaylist
+        await addPlaylistItems(selectedPlaylist, additions)
+        setItems(await listPlaylistItems(selectedPlaylist))
+        await refresh()
+        onNotice(`${indexed.length} videos indexed · ${additions.length} added to the playlist.`, 'success')
+      } else if (selectedPlaylist != null) {
+        onNotice(indexed.length
+          ? `${indexed.length} videos indexed; they are already in this playlist.`
+          : 'No videos were found in the selected folders.', 'info')
+      } else {
+        onNotice(indexed.length
+          ? `${indexed.length} videos indexed. Create a playlist, then add them.`
+          : 'No videos were found in the selected folders.', 'info')
+      }
+    } catch (error) {
+      debugLog('playlists', 'add_videos_from_folder_failed', { message: friendlyError(error) })
+      onNotice(friendlyError(error), 'error')
+    } finally {
+      preferredRefreshRef.current = null
+      setIndexingVideos(false)
+    }
+  }, [available, items, mutateGlobal, onNotice, refresh, selectedPlaylist])
 
   function requireSelection(): number[] {
     if (!selectedMediaIds.length) {
@@ -253,6 +314,18 @@ export default function PlaylistManager({
     )
   }
 
+  const folderButton = (label: string) => (
+    <button
+      type="button"
+      className="queue-primary playlist-add-folder"
+      onClick={() => void addVideosFromFolder()}
+      disabled={busy || indexingVideos || !available}
+    >
+      {indexingVideos ? <LoaderCircle size={15} className="spin-icon" /> : <FolderPlus size={15} />}
+      {indexingVideos ? 'Indexing videos…' : label}
+    </button>
+  )
+
   return (
     <section className={`queue-section playlist-manager ${compact ? 'playlist-manager-compact' : ''}`} aria-labelledby={titleId}>
       <div className="queue-section-head">
@@ -312,7 +385,10 @@ export default function PlaylistManager({
       <div className="playlist-shelf-label"><span>{compact ? 'YOUR PLAYLISTS' : 'PICK UP WHERE YOU LEFT OFF'}</span>{!compact && playlists.length > 0 && <small>{playlists.length} saved</small>}</div>
       <div className="playlist-grid">
         {playlists.map((playlist, index) => playlistCard(playlist, !compact && index < 3))}
-        {!playlists.length && <div className="playlist-empty">No playlists yet. Create one above, then add indexed videos.</div>}
+        {!playlists.length && <div className="playlist-empty playlist-empty-action">
+          <p>No playlists yet. Create one above, or add a folder of videos to your library to get started.</p>
+          {folderButton('Add videos from folder')}
+        </div>}
       </div>
 
       {selectedPlaylist != null && <div className="playlist-detail">
@@ -327,6 +403,7 @@ export default function PlaylistManager({
               const playlist = playlists.find((item) => item.id === selectedPlaylist)
               if (playlist) playWholePlaylist(playlist)
             }} disabled={busy || !items.length || !available}><Play size={14} fill="currentColor" /> Play playlist</button>
+            {folderButton('Add from folder')}
             <button className="queue-primary" onClick={() => {
               const ids = requireSelection()
               if (!ids.length) return
@@ -371,7 +448,10 @@ export default function PlaylistManager({
               </div>
             </div>
           ))}</div>
-        </> : <div className="playlist-empty">This playlist is empty. Select indexed videos above and choose “Add selected videos”.</div>}
+        </> : <div className="playlist-empty playlist-empty-action">
+          <p>This playlist is empty. Choose a folder with videos to add them now, or select already-indexed videos above and choose “Add selected videos”.</p>
+          {folderButton('Add videos from folder')}
+        </div>}
       </div>}
 
       {!available && <div className="queue-error"><AlertCircle size={15} />Playlist controls require the installed Windows desktop app.</div>}

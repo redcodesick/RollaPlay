@@ -11,6 +11,7 @@ All notable changes to RollaPlay are documented here. The format follows [Keep a
 - Safe, specific explanations for private/sign-in-only links, unavailable videos, sign-in challenges, unsupported links and outdated yt-dlp. Raw tool output is never echoed.
 - Discovery of tools inside WinGet's versioned package folders, so a fresh install works without restarting the app or shell.
 - Downloader tool preflight checks: RollaPlay runs `yt-dlp --version` and `ffmpeg -version` when the view opens and before every download. Missing or non-responding tools are installed automatically with WinGet (GitHub fallback), and the status pills now distinguish "ready", "not responding" and "not installed".
+- Empty playlists now offer **Add videos from folder**: it opens the folder picker, indexes the chosen folders and adds the newly indexed videos directly to the open playlist.
 
 ### Fixed
 
@@ -23,6 +24,7 @@ All notable changes to RollaPlay are documented here. The format follows [Keep a
 - Progress listeners stay attached when the destination folder changes, and each download row now has a real progress bar.
 - A broken or stale tool executable is no longer treated as ready; WinGet's newest versioned copy is preferred and tool installation is retried when a version check fails.
 - Unmapped downloader errors keep only fixed placeholders for URLs, paths, tokens and video IDs before being written to diagnostics.
+- User-verified: a public YouTube download now completes after the tools are installed and the MP4 files appear in the chosen folder; the earlier silent "Downloading…" failure is gone.
 
 ## [0.1.0] - 2026-11-23
 
