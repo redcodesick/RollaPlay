@@ -58,6 +58,22 @@ fn canonicalize_media_path(path: &Path) -> std::io::Result<PathBuf> {
 
 struct AppDatabase(Arc<Mutex<Connection>>);
 
+/// Set only after the user confirms the in-app exit dialog. The native close
+/// handler asks for confirmation before this flag is set, so the shutdown
+/// ordering below still runs exactly once on a confirmed exit.
+#[derive(Default)]
+struct ExitApproval(AtomicBool);
+
+impl ExitApproval {
+    fn approved(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+
+    fn approve(&self) {
+        self.0.store(true, Ordering::SeqCst)
+    }
+}
+
 struct ScanRegistry(Arc<Mutex<HashMap<i64, Arc<AtomicBool>>>>);
 
 #[derive(Serialize)]
@@ -212,6 +228,11 @@ struct ExistingPlaylistFileImport {
     size_bytes: i64,
     modified_at: String,
     status: String,
+}
+
+#[tauri::command]
+fn approve_app_exit(approval: State<'_, ExitApproval>) {
+    approval.approve()
 }
 
 #[tauri::command]
@@ -2451,6 +2472,7 @@ pub fn run() {
                 .map_err(|_| std::io::Error::from(std::io::ErrorKind::Other))?;
             let database = Arc::new(Mutex::new(connection));
             app.manage(AppDatabase(Arc::clone(&database)));
+            app.manage(ExitApproval::default());
             app.manage(ScanRegistry(Arc::new(Mutex::new(HashMap::new()))));
             app.manage(ThumbnailService {
                 cache_dir,
@@ -2483,6 +2505,11 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if !window.state::<ExitApproval>().approved() {
+                    api.prevent_close();
+                    let _ = window.emit("app-exit-requested", ());
+                    return;
+                }
                 let closing_window = window.clone();
                 let server = closing_window.state::<MediaServerManager>().inner().clone();
                 let cast = closing_window.state::<CastSenderManager>().inner().clone();
@@ -2506,6 +2533,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            approve_app_exit,
             get_local_status,
             wizard_diag_log,
             add_media_directory,

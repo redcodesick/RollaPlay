@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import useSWR from 'swr'
 import { listen } from '@tauri-apps/api/event'
-import { convertFileSrc } from '@tauri-apps/api/core'
+import { convertFileSrc, invoke } from '@tauri-apps/api/core'
+import { getName, getTauriVersion, getVersion } from '@tauri-apps/api/app'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import MediaLibrary from './components/MediaLibrary'
 import MediaServerSettings from './components/MediaServerSettings'
 import CastPanel from './components/CastPanel'
@@ -17,16 +19,17 @@ import {
   playerStateLabel, showCastSender, type SenderHostRect,
 } from './cast'
 import {
-  formatDuration, getPlaybackState, isPlaylistAvailable, listPlaylists, playMediaNow, playNext,
-  playPlaylist, playPrevious, type Phase5Notification, type PlaybackSnapshot, type PlaylistSummary,
+  clearWatchHistory, formatDuration, getPlaybackState, isPlaylistAvailable, listPlaylists,
+  playMediaNow, playNext, playPlaylist, playPrevious, type Phase5Notification,
+  type PlaybackSnapshot, type PlaylistSummary,
 } from './playlist'
 import { formatBytes, getLocalStatus, getMediaDirectories, getMediaFiles, isDesktopApp, type MediaFile } from './media'
 import { debugLog } from './diagnostics'
 import {
-  Aperture, AlertCircle, Cast, Check, ChevronDown, CircleHelp, Clapperboard, Clock3,
-  Film, FolderPlus, Gauge, HardDrive, History, House, Library,
+  Aperture, AlertCircle, Cast, Check, ChevronDown, ChevronsLeft, ChevronsRight, CircleHelp,
+  Clapperboard, Clock3, Film, FolderPlus, Gauge, HardDrive, History, House, Info, Library,
   ListMusic, MoreHorizontal, Pause, Play, Plus, Search, Settings2, ShieldCheck,
-  SkipBack, SkipForward, SlidersHorizontal, Sparkles, Volume2, VolumeX, Wifi, X,
+  SkipBack, SkipForward, SlidersHorizontal, Sparkles, Trash2, Volume2, VolumeX, Wifi, X,
 } from 'lucide-react'
 
 type View = 'Home' | 'Library' | 'Playlists' | 'Recently added' | 'History' | 'Settings'
@@ -40,30 +43,44 @@ const navItems: { label: View; icon: typeof House }[] = [
   { label: 'History', icon: History },
 ]
 
-function Sidebar({ active, playlistCount, onNavigate, onSetup }: { active: View; playlistCount: number; onNavigate: (view: View) => void; onSetup: () => void }) {
+function Sidebar({
+  active, playlistCount, collapsed, onToggle, onNavigate, onSetup, onAbout,
+}: {
+  active: View
+  playlistCount: number
+  collapsed: boolean
+  onToggle: () => void
+  onNavigate: (view: View) => void
+  onSetup: () => void
+  onAbout: () => void
+}) {
   return (
-    <aside className="sidebar">
-      <a className="brand" href="#home" aria-label="RollaPlay home" onClick={(event) => { event.preventDefault(); onNavigate('Home') }}>
+    <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
+      <a className="brand" href="#home" aria-label="RollaPlay home" title="RollaPlay home" onClick={(event) => { event.preventDefault(); onNavigate('Home') }}>
         <span className="brand-mark"><Aperture size={19} strokeWidth={2.4} /></span>
         <span className="brand-name"><b>ROLLA</b>PLAY<span>ROCKNROLLA MEDIA STATION</span></span>
       </a>
       <div className="nav-label">YOUR SPACE</div>
       <nav className="primary-nav" aria-label="Main navigation">
         {navItems.map(({ label, icon: Icon }) => (
-          <button key={label} className={`nav-item ${active === label ? 'active' : ''}`} onClick={() => onNavigate(label)} aria-current={active === label ? 'page' : undefined}>
+          <button key={label} className={`nav-item ${active === label ? 'active' : ''}`} onClick={() => onNavigate(label)} title={label} aria-current={active === label ? 'page' : undefined}>
             <Icon size={19} strokeWidth={1.8} /><span>{label}</span>{label === 'Playlists' && <span className="nav-count">{playlistCount}</span>}
           </button>
         ))}
       </nav>
       <div className="sidebar-divider" />
-      <button className={`nav-item ${active === 'Settings' ? 'active' : ''}`} onClick={() => onNavigate('Settings')} aria-current={active === 'Settings' ? 'page' : undefined}><Settings2 size={19} strokeWidth={1.8} /><span>Settings</span></button>
+      <button className={`nav-item ${active === 'Settings' ? 'active' : ''}`} onClick={() => onNavigate('Settings')} title="Settings" aria-current={active === 'Settings' ? 'page' : undefined}><Settings2 size={19} strokeWidth={1.8} /><span>Settings</span></button>
       <div className="sidebar-spacer" />
       <div className="local-card">
         <div className="local-card-icon"><HardDrive size={17} /></div>
         <div className="local-copy"><strong>Everything stays local</strong><span>Your files never leave this PC.</span></div>
         <ShieldCheck size={16} className="shield-icon" />
       </div>
-      <button className="help-link" onClick={onSetup}><CircleHelp size={17} /> Setup guide</button>
+      <button className="help-link" onClick={onSetup} title="Setup guide"><CircleHelp size={17} /> <span>Setup guide</span></button>
+      <button className="help-link" onClick={onAbout} title="About RollaPlay"><Info size={17} /> <span>About RollaPlay</span></button>
+      <button className="sidebar-collapse" onClick={onToggle} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!collapsed}>
+        {collapsed ? <ChevronsRight size={18} /> : <><ChevronsLeft size={18} /><span>Collapse</span></>}
+      </button>
       <div className="profile-row"><div className="profile-avatar">M</div><div><strong>RockNRolla Station</strong><span>Local device</span></div><MoreHorizontal size={18} /></div>
     </aside>
   )
@@ -327,6 +344,65 @@ function SetupDialog({
   )
 }
 
+function AboutDialog({
+  onClose, onOpenSetup, folderCount, videoCount, playlistCount,
+}: {
+  onClose: () => void
+  onOpenSetup: () => void
+  folderCount: number
+  videoCount: number
+  playlistCount: number
+}) {
+  const [info, setInfo] = useState({ name: 'RollaPlay', version: '0.1.0', tauri: '—' })
+  useEffect(() => {
+    if (!isDesktopApp()) return
+    let active = true
+    void Promise.all([getName(), getVersion(), getTauriVersion()])
+      .then(([name, version, tauri]) => { if (active) setInfo({ name, version, tauri }) })
+      .catch(() => { /* Keep the packaged defaults when the host API is unavailable. */ })
+    return () => { active = false }
+  }, [])
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <section className="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title">
+        <button className="dialog-close" onClick={onClose} aria-label="Close about">×</button>
+        <div className="setup-eyebrow"><Aperture size={15} /> ABOUT THIS APP</div>
+        <div className="about-brand">
+          <span className="about-mark"><Aperture size={28} /></span>
+          <div><h2 id="about-title">{info.name}</h2><p>Local media, loud attitude.</p></div>
+        </div>
+        <p className="about-lede">RollaPlay keeps your video library on this PC and streams original files straight to your TV. No account, no uploads, no subscriptions.</p>
+        <dl className="about-facts">
+          <div><dt>Version</dt><dd>{info.version}</dd></div>
+          <div><dt>Tauri runtime</dt><dd>{info.tauri}</dd></div>
+          <div><dt>Platform</dt><dd>Windows desktop</dd></div>
+          <div><dt>Media folders</dt><dd>{folderCount}</dd></div>
+          <div><dt>Indexed videos</dt><dd>{videoCount}</dd></div>
+          <div><dt>Saved playlists</dt><dd>{playlistCount}</dd></div>
+        </dl>
+        <div className="about-note"><ShieldCheck size={16} /><span>Metadata, playlists and settings stay on this device. Casting uses Google Chrome and your home network only.</span></div>
+        <div className="setup-footer"><button className="button-text" onClick={onOpenSetup}>Open setup guide <span>→</span></button><button className="button-primary" onClick={onClose}>Done</button></div>
+      </section>
+    </div>
+  )
+}
+
+function ExitConfirmDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="exit-title" aria-describedby="exit-copy">
+        <div className="setup-icon"><AlertCircle size={25} /></div>
+        <h2 id="exit-title">Are you sure you want to exit?</h2>
+        <p id="exit-copy">Receiver playback will stop and the Cast connection will close. Your library, playlists and settings are saved on this device.</p>
+        <div className="setup-footer">
+          <button className="button-text" onClick={onCancel}>Cancel</button>
+          <button className="button-primary" onClick={onConfirm}>Exit RollaPlay <span>→</span></button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function SettingsView({ onManage, onPlayback }: { onManage: () => void; onPlayback: () => void }) {
   const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   return (
@@ -369,6 +445,9 @@ function App() {
   const [setupOpen, setSetupOpen] = useState(false)
   const [setupStep, setSetupStep] = useState(0)
   const [setupDone, setSetupDone] = useState(() => localStorage.getItem('wms.setup.completed') === '1')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('wms.sidebar.collapsed') === '1')
+  const [aboutOpen, setAboutOpen] = useState(false)
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false)
   const [selectedMediaIds, setSelectedMediaIds] = useState<number[]>([])
   const [notice, setNotice] = useState<{ message: string; level: Phase5Notification['level'] } | null>(null)
   const [connectOpen, setConnectOpen] = useState(false)
@@ -392,6 +471,11 @@ function App() {
     getMediaFiles,
     { refreshInterval: 10000 },
   )
+  const { data: mediaDirectories } = useSWR(
+    isDesktopApp() ? 'about-media-directories' : null,
+    getMediaDirectories,
+    { refreshInterval: 30000 },
+  )
   const showNotice = useCallback<Notice>((message, level = 'info') => {
     setNotice({ message, level })
   }, [])
@@ -406,6 +490,38 @@ function App() {
   const playSelectedPlaylist = useCallback((id: number) => {
     void playPlaylist(id).then(() => mutatePhase5()).catch((error) => showNotice(String(error), 'error'))
   }, [mutatePhase5, showNotice])
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((previous) => {
+      const next = !previous
+      localStorage.setItem('wms.sidebar.collapsed', next ? '1' : '0')
+      return next
+    })
+  }, [])
+  const confirmExit = useCallback(async () => {
+    try {
+      await invoke('approve_app_exit')
+      await getCurrentWindow().close()
+    } catch (error) {
+      setExitConfirmOpen(false)
+      showNotice(String(error), 'error')
+    }
+  }, [showNotice])
+  const clearHistory = useCallback(() => {
+    if (!phase5Snapshot?.history.length) return
+    void clearWatchHistory()
+      .then(() => mutatePhase5())
+      .then(() => showNotice('Watch history cleared.', 'success'))
+      .catch((error) => showNotice(String(error), 'error'))
+  }, [phase5Snapshot?.history.length, mutatePhase5, showNotice])
+  useEffect(() => {
+    if (!isDesktopApp()) return
+    let active = true
+    let unlisten: (() => void) | undefined
+    void listen('app-exit-requested', () => { if (active) setExitConfirmOpen(true) })
+      .then((stop) => { if (active) unlisten = stop; else stop() })
+      .catch(() => { /* The native close still works without the styled dialog. */ })
+    return () => { active = false; unlisten?.() }
+  }, [])
   useEffect(() => {
     if (!isDesktopApp()) return
     let disposed = false
@@ -634,8 +750,16 @@ function App() {
     playPrevious().then(() => mutatePhase5()).catch((error) => showNotice(String(error), 'error'))
   }
   return (
-    <div className="app-shell">
-      <Sidebar active={active} playlistCount={playlists?.length ?? 0} onNavigate={setActive} onSetup={openSetup} />
+    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+      <Sidebar
+        active={active}
+        playlistCount={playlists?.length ?? 0}
+        collapsed={sidebarCollapsed}
+        onToggle={toggleSidebar}
+        onNavigate={setActive}
+        onSetup={openSetup}
+        onAbout={() => setAboutOpen(true)}
+      />
       <main className="main-area">
         <header className="topbar">
           <div className="breadcrumb"><span>MY MEDIA</span><span className="crumb-slash">/</span><strong>{active.toUpperCase()}</strong></div>
@@ -668,7 +792,10 @@ function App() {
           </section>
           : active === 'History' ? <section className="section-page">
             <div className="section-eyebrow">ACTIVITY</div>
-            <h1>{pageTitle}</h1>
+            <div className="section-heading-row">
+              <h1>{pageTitle}</h1>
+              <button className="clear-button" onClick={clearHistory} disabled={!phase5Snapshot?.history.length} title="Clear all watch history"><Trash2 size={15} /> Clear history</button>
+            </div>
             <p>Recorded from real receiver playback only.</p>
             <div className="history-list history-page-list">
               {phase5Snapshot?.history.length ? phase5Snapshot.history.map((entry) => (
@@ -729,6 +856,14 @@ function App() {
         onSelectionChange={setSelectedMediaIds}
         snapshot={phase5Snapshot ?? null}
       />}
+      {aboutOpen && <AboutDialog
+        onClose={() => setAboutOpen(false)}
+        onOpenSetup={() => { setAboutOpen(false); openSetup() }}
+        folderCount={mediaDirectories?.length ?? 0}
+        videoCount={recentFiles?.length ?? 0}
+        playlistCount={playlists?.length ?? 0}
+      />}
+      {exitConfirmOpen && <ExitConfirmDialog onCancel={() => setExitConfirmOpen(false)} onConfirm={() => void confirmExit()} />}
       {query && active !== 'Library' && <div className="search-feedback" role="status">Open Media library to search your indexed videos.</div>}
     </div>
   )
