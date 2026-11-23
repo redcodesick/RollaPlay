@@ -253,6 +253,9 @@ struct CastSnapshotInternal {
     public: CastPlaybackSnapshot,
     pending_load: Option<(i64, String)>,
     last_progress_db_write: Option<Instant>,
+    /// Session id of the sender that currently owns the Cast session. Used to
+    /// reject stale session-ended/failed events from a second sender window.
+    active_cast_session_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -288,6 +291,11 @@ pub fn sender_bridge_router(state: CastBridgeState) -> Router {
         .with_state(state)
 }
 
+/// The Cast loader injects protocol-relative `//www.gstatic.com/...` scripts.
+/// On this HTTP loopback origin those become `http://www.gstatic.com/...`,
+/// which a strict `https:`-only `script-src` blocks. `upgrade-insecure-requests`
+/// promotes them to HTTPS before the CSP check, so the SDK loads without
+/// weakening the allow-list to permit plain HTTP scripts.
 fn secure_page_response(body: &'static str, content_type: &'static str) -> Response {
     (
         [
@@ -295,7 +303,8 @@ fn secure_page_response(body: &'static str, content_type: &'static str) -> Respo
             (
                 CONTENT_SECURITY_POLICY,
                 HeaderValue::from_static(
-                    "default-src 'self'; script-src 'self' https://www.gstatic.com; \
+                    "default-src 'self'; upgrade-insecure-requests; \
+                     script-src 'self' https://www.gstatic.com; \
                      style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; \
                      media-src 'self'; frame-ancestors 'none'; base-uri 'none'",
                 ),
@@ -370,6 +379,16 @@ fn clamp_number(value: Option<&Value>) -> Option<f64> {
     value.is_finite().then_some(value)
 }
 
+/// A session event may only end the session that is currently active. Events
+/// without a session id are accepted only when no session is being tracked.
+fn session_event_matches(active: Option<&String>, reported: Option<&String>) -> bool {
+    match (active, reported) {
+        (Some(active), Some(reported)) => active == reported,
+        (None, _) => true,
+        (Some(_), None) => false,
+    }
+}
+
 async fn handle_playback_event(state: &CastBridgeState, event: Value) {
     let kind = clamp_string(event.get("type"), 40).unwrap_or_else(|| "unknown".to_string());
     let device_name = clamp_string(event.get("device_name"), 120);
@@ -397,7 +416,7 @@ async fn handle_playback_event(state: &CastBridgeState, event: Value) {
         duration_seconds: duration,
         message: message.clone().or(error_code.clone()),
         playback_token,
-        cast_session_id,
+        cast_session_id: cast_session_id.clone(),
         media_session_id,
         idle_reason,
     };
@@ -406,12 +425,28 @@ async fn handle_playback_event(state: &CastBridgeState, event: Value) {
     {
         let mut snapshot = state.snapshot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         snapshot.public.updated_at_epoch_ms = now_epoch_ms();
+        // Only the sender that owns the active session may end it. A second
+        // sender window sees no devices and posts session_start_failed; without
+        // this guard it would erase the device name of the sender that is
+        // actually casting.
+        let session_matches = session_event_matches(
+            snapshot.active_cast_session_id.as_ref(),
+            cast_session_id.as_ref(),
+        );
         match kind.as_str() {
             "sender_ready" => {}
             "cast_state" => {
                 snapshot.public.cast_state = cast_state.clone();
+                // A reconnecting sender can report cast state before a session
+                // event; keep the receiver visible when the SDK supplies it.
+                if device_name.is_some() {
+                    snapshot.public.device_name = device_name.clone();
+                }
             }
             "session_started" | "session_resumed" => {
+                if cast_session_id.is_some() {
+                    snapshot.active_cast_session_id = cast_session_id.clone();
+                }
                 snapshot.public.device_name = device_name.clone();
                 snapshot.public.session_state = Some(
                     session_state
@@ -421,27 +456,35 @@ async fn handle_playback_event(state: &CastBridgeState, event: Value) {
                 snapshot.public.last_error = None;
             }
             "session_start_failed" => {
-                snapshot.public.device_name = None;
-                snapshot.public.session_state = session_state.clone().or_else(|| Some("SESSION_START_FAILED".to_string()));
-                snapshot.public.player_state = Some("IDLE".to_string());
-                let failure = message
-                    .clone()
-                    .or(error_code.clone())
-                    .unwrap_or_else(|| "The Cast session did not start.".to_string());
-                snapshot.public.last_error = Some(failure.clone());
-                if let Ok(mut last) = state.last_error.lock() {
-                    *last = Some(failure);
+                if session_matches {
+                    snapshot.public.device_name = None;
+                    snapshot.public.session_state = session_state.clone().or_else(|| Some("SESSION_START_FAILED".to_string()));
+                    snapshot.public.player_state = Some("IDLE".to_string());
+                    let failure = message
+                        .clone()
+                        .or(error_code.clone())
+                        .unwrap_or_else(|| "The Cast session did not start.".to_string());
+                    snapshot.public.last_error = Some(failure.clone());
+                    if let Ok(mut last) = state.last_error.lock() {
+                        *last = Some(failure);
+                    }
                 }
             }
             "session_ended" => {
-                snapshot.public.device_name = None;
-                snapshot.public.session_state = session_state.clone().or_else(|| Some("SESSION_ENDED".to_string()));
-                snapshot.public.player_state = Some("IDLE".to_string());
-                snapshot.public.position_seconds = Some(0.0);
-                snapshot.public.duration_seconds = None;
-                database_write = Some(("finalize", position.unwrap_or(0.0)));
+                if session_matches {
+                    snapshot.public.device_name = None;
+                    snapshot.active_cast_session_id = None;
+                    snapshot.public.session_state = session_state.clone().or_else(|| Some("SESSION_ENDED".to_string()));
+                    snapshot.public.player_state = Some("IDLE".to_string());
+                    snapshot.public.position_seconds = Some(0.0);
+                    snapshot.public.duration_seconds = None;
+                    database_write = Some(("finalize", position.unwrap_or(0.0)));
+                }
             }
             "media_loaded" => {
+                if device_name.is_some() {
+                    snapshot.public.device_name = device_name.clone();
+                }
                 if let Some((media_file_id, filename)) = snapshot.pending_load.take() {
                     snapshot.public.media_file_id = Some(media_file_id);
                     snapshot.public.filename = Some(filename);
@@ -450,6 +493,11 @@ async fn handle_playback_event(state: &CastBridgeState, event: Value) {
                 snapshot.public.last_error = None;
             }
             "media_status" => {
+                // Periodic status is also a device heartbeat. This keeps the
+                // connected receiver visible even if a session event was lost.
+                if device_name.is_some() {
+                    snapshot.public.device_name = device_name.clone();
+                }
                 if player_state.is_some() {
                     snapshot.public.player_state = player_state.clone();
                 }
@@ -1163,6 +1211,39 @@ mod tests {
         assert!(SENDER_JS.contains("setVolumeLevel"));
         assert!(SENDER_JS.contains("endCurrentSession"));
         assert!(SENDER_JS.contains("RemotePlayerController"));
+    }
+
+    #[test]
+    fn stale_sender_session_events_cannot_clear_the_active_receiver() {
+        let active = Some("session-123".to_string());
+        let same = Some("session-123".to_string());
+        let other = Some("session-999".to_string());
+        assert!(session_event_matches(active.as_ref(), same.as_ref()));
+        assert!(!session_event_matches(active.as_ref(), other.as_ref()));
+        // A second sender's failure has no session id; it must not win while a
+        // real session is active.
+        assert!(!session_event_matches(active.as_ref(), None));
+        // With no session tracked, the first failure/end event is authoritative.
+        assert!(session_event_matches(None, None));
+        assert!(session_event_matches(None, other.as_ref()));
+    }
+
+    #[test]
+    fn sender_page_csp_upgrades_the_cast_loaders_insecure_script_urls() {
+        // Google's loader injects //www.gstatic.com/... scripts; on this HTTP
+        // origin they must be upgraded to HTTPS before the CSP allow-list is
+        // applied, otherwise the Cast framework cannot load at all.
+        let response = secure_page_response(SENDER_HTML, "text/html; charset=utf-8");
+        let policy = response
+            .headers()
+            .get(CONTENT_SECURITY_POLICY)
+            .expect("sender page must set a CSP")
+            .to_str()
+            .expect("CSP must be valid UTF-8")
+            .to_string();
+        assert!(policy.contains("upgrade-insecure-requests"), "CSP was: {policy}");
+        assert!(policy.contains("script-src 'self' https://www.gstatic.com"));
+        assert!(!policy.contains("http://www.gstatic.com"));
     }
 
     #[test]

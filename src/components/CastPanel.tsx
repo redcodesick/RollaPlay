@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import { isDesktopApp } from '../media'
 import {
-  castSendControl, castStateLabel, formatSeconds, getCastDiagnostics,
+  castDeviceName, castSendControl, castStateLabel, formatSeconds, getCastDiagnostics,
   getCastPlaybackState, getCastSenderStatus, isCastAvailable, launchCastSender, onCastPlaybackEvent,
   onCastSenderStatusChanged, playerStateLabel, sessionStateLabel, stopCastSender,
   type CastPlaybackSnapshot, type CastSenderStatus,
@@ -117,7 +117,7 @@ export default function CastPanel() {
     const target = seekPreview
     setSeekPreview(null)
     if (target === null || target === undefined) return
-    await runAction(() => castSendControl('seek', { position_seconds: target }))
+    await runAction(() => castSendControl('seek', { positionSeconds: target }))
   }
 
   async function commitVolume() {
@@ -129,7 +129,8 @@ export default function CastPanel() {
   }
 
   const snapshot = playback ?? ({ updated_at_epoch_ms: 0 } as CastPlaybackSnapshot)
-  const connected = !!snapshot.device_name
+  const connectedDevice = castDeviceName(snapshot)
+  const connected = !!connectedDevice
   const hasMedia = snapshot.media_file_id !== null && snapshot.media_file_id !== undefined
   const playing = snapshot.player_state === 'PLAYING'
   const position = seekPreview ?? snapshot.position_seconds ?? 0
@@ -137,7 +138,7 @@ export default function CastPanel() {
   const hint = discoveryHint(snapshot, status)
   const volume = snapshot.volume_level ?? 1
   const muted = !!snapshot.muted
-  const deviceLabel = connected ? `Casting to ${snapshot.device_name}` : 'No Cast device connected'
+  const deviceLabel = connected ? `Casting to ${connectedDevice}` : 'No Cast device connected'
   const stateClass = connected ? (playing ? 'playing' : 'paused') : 'offline'
 
   return (
@@ -160,17 +161,17 @@ export default function CastPanel() {
         <article className="cast-info-card"><span><Globe size={15} /> GOOGLE CHROME</span><strong>{status?.chrome_installed ? 'Detected' : 'Not found'}</strong><small>{status?.chrome_installed ? status.chrome_path ?? 'Registered install location' : 'The official Cast sender SDK requires Chrome'}</small></article>
         <article className="cast-info-card"><span><Cast size={15} /> SENDER WINDOW</span><strong>{senderWindowLabels[status?.sender_window_state ?? 'not_launched'] ?? 'Unknown'}</strong><small>Sender page {status?.sender_page_connected ? 'connected' : 'not connected'} · last seen {formatAgo(status?.sender_page_last_seen_ms_ago ?? null)}</small></article>
         <article className="cast-info-card"><span><Cast size={15} /> DISCOVERY</span><strong>{castStateLabel(snapshot.cast_state)}</strong><small>Session: {sessionStateLabel(snapshot.session_state)}</small></article>
-        <article className="cast-info-card"><span><Cast size={15} /> CONNECTED DEVICE</span><strong>{snapshot.device_name ?? 'None'}</strong><small>{status?.bridge_state === 'running' ? `Local sender bridge on 127.0.0.1:${status.bridge_port ?? ''}` : 'Local sender bridge stopped'}</small></article>
+        <article className="cast-info-card"><span><Cast size={15} /> CONNECTED DEVICE</span><strong>{connectedDevice ?? 'None'}</strong><small>{status?.bridge_state === 'running' ? `Local sender bridge on 127.0.0.1:${status.bridge_port ?? ''}` : 'Local sender bridge stopped'}</small></article>
       </div>
 
       <div className="cast-controls-card">
         <div className="cast-controls-heading">
           <div>
             <h3>Cast sender</h3>
-            <p>The desktop app launches a dedicated Chrome window that runs the official Google Cast sender SDK. You do not need to operate it manually.</p>
+            <p>The player stays in this window. A small Chrome sender opens only to run the official Cast SDK and pick a receiver; once selected, it stays connected.</p>
           </div>
           <div className="cast-controls-actions">
-            <button className="button-primary" onClick={() => runAction(() => launchCastSender(), 'The Cast sender window is ready.')} disabled={!isDesktop || isWorking}>
+            <button className="button-primary" onClick={() => runAction(() => launchCastSender(), connectedDevice ? `Sender ready. Casting to ${connectedDevice}.` : 'Sender ready. Choose your TV in the Chrome sender window.')} disabled={!isDesktop || isWorking}>
               {isWorking ? <LoaderCircle size={15} className="spin-icon" /> : <Cast size={15} />} Launch sender
             </button>
             <button className="folder-action" onClick={() => runAction(() => stopCastSender(), 'The Cast sender window was closed.')} disabled={!isDesktop || isWorking}>Close sender</button>
@@ -254,7 +255,7 @@ export default function CastPanel() {
           <article className="cast-diagnostic-row"><div><strong>Sender status</strong><span>{status?.sender_page_connected ? 'Connected to the desktop bridge' : 'Waiting for the Chrome sender page'}</span></div><span className={status?.sender_page_connected ? 'cast-ok' : ''}>{status?.sender_page_connected ? 'OK' : 'IDLE'}</span></article>
           <article className="cast-diagnostic-row"><div><strong>Chrome status</strong><span>{status?.chrome_installed ? status.chrome_path ?? 'Detected' : 'Chrome is not installed on this PC'}</span></div><span className={status?.chrome_installed ? 'cast-ok' : 'cast-bad'}>{status?.chrome_installed ? 'OK' : 'MISSING'}</span></article>
           <article className="cast-diagnostic-row"><div><strong>Discovery status</strong><span>{castStateLabel(snapshot.cast_state)}</span></div><span className={snapshot.cast_state === 'CONNECTED' ? 'cast-ok' : ''}>{snapshot.cast_state ?? 'IDLE'}</span></article>
-          <article className="cast-diagnostic-row"><div><strong>Connected device</strong><span>{snapshot.device_name ?? 'None yet'}</span></div><span>{snapshot.device_name ? 'ACTIVE' : 'NONE'}</span></article>
+          <article className="cast-diagnostic-row"><div><strong>Connected device</strong><span>{connectedDevice ?? 'None yet'}</span></div><span>{connectedDevice ? 'ACTIVE' : 'NONE'}</span></article>
           <article className="cast-diagnostic-row"><div><strong>Current session</strong><span>{sessionStateLabel(snapshot.session_state)}</span></div><span>{snapshot.session_state ?? 'NONE'}</span></article>
           <article className="cast-diagnostic-row"><div><strong>Media URL reachability</strong><span>{diagnostics?.media_url_probe ? diagnostics.media_url_probe.message : 'Probe a cast to check the LAN URL'}</span></div><span className={diagnostics?.media_url_probe?.reachable ? 'cast-ok' : ''}>{diagnostics?.media_url_probe ? (diagnostics.media_url_probe.reachable ? `HTTP ${diagnostics.media_url_probe.status_code ?? 206}` : 'FAILED') : '—'}</span></article>
           <article className="cast-diagnostic-row"><div><strong>Active streaming grants</strong><span>Short-lived, media-scoped receiver credentials held in memory</span></div><span>{diagnostics?.active_cast_grants ?? 0}</span></article>

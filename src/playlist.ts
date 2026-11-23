@@ -1,4 +1,5 @@
-import { invoke, isTauri } from '@tauri-apps/api/core'
+import { isTauri } from '@tauri-apps/api/core'
+import { invokeTracked } from './diagnostics'
 
 export type PlaybackMode = 'manual' | 'auto'
 export type RepeatMode = 'off' | 'one' | 'all'
@@ -76,7 +77,7 @@ export function isPlaylistAvailable(): boolean {
 }
 
 const call = <T>(command: string, args?: Record<string, unknown>): Promise<T> =>
-  invoke<T>(command, args)
+  invokeTracked<T>(command, args, 'playlists')
 
 export const getPlaybackState = () => call<PlaybackSnapshot>('phase5_get_state')
 

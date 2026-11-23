@@ -70,7 +70,8 @@ export type CastControlAction =
   | 'close_sender'
 
 export type CastControlOptions = {
-  position_seconds?: number
+  /** Tauri v2 expects camelCase argument names for Rust snake_case parameters. */
+  positionSeconds?: number
   volume?: number
   muted?: boolean
 }
@@ -99,6 +100,28 @@ export const onCastPlaybackEvent = (handler: (event: CastEventReport) => void) =
 
 export const onCastSenderStatusChanged = (handler: () => void) =>
   listen('cast-sender-status-changed', () => handler())
+
+const activeSessionStates = new Set([
+  'SESSION_STARTED', 'SESSION_RESUMED',
+  'SESSION_STATE_STARTED', 'SESSION_STATE_RESUMED',
+])
+
+/**
+ * The sender normally reports the friendly receiver name with session events.
+ * If those events arrive out of order (or from a second sender window), the
+ * player can still be casting while `device_name` is briefly null. Treat an
+ * active session/cast state or actual receiver playback as connected so the UI
+ * never claims "No cast device" while video is playing on the TV.
+ */
+export function castDeviceName(snapshot: CastPlaybackSnapshot | null | undefined): string | null {
+  if (!snapshot) return null
+  if (snapshot.device_name) return snapshot.device_name
+  const activelyCasting =
+    snapshot.cast_state === 'CONNECTED' ||
+    activeSessionStates.has(snapshot.session_state ?? '') ||
+    snapshot.player_state === 'PLAYING'
+  return activelyCasting ? 'Cast device' : null
+}
 
 export function castStateLabel(state: string | null | undefined) {
   switch (state) {

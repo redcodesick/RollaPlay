@@ -1,6 +1,6 @@
 # Windows Media Station — Phase 4 Cast Testing Checklist
 
-**Status: Not run in this workspace.** The current agent workspace is Linux without Rust/Cargo, Chrome, or a Xiaomi Mi Box. Every item below must be executed on real hardware before Phase 4 is considered done. Record **Pass / Fail / Blocked** with steps, expected/actual results, logs, and a screenshot where useful. A blocked test is not a pass. Do not mark any hardware item complete from a code review or from this document.
+**Status: discovery and live session verified on a real receiver; playback/completion checklist still to run.** The workspace is Windows with Rust/Cargo, Node/pnpm and Chrome 157.0.8103.79. The packaged app discovered a Chromecast-enabled receiver named `Living Room TV` and reported `SESSION_STARTED` with that device after fixing the sender CSP (see [docs/windows-validation.md](docs/windows-validation.md)). This proves discovery and session establishment only; it does **not** prove media playback, receiving-side decoding, or `IdleReason.FINISHED` completion. Every playback item below must still be executed on real hardware before Phase 4 is considered done. Record **Pass / Fail / Blocked** with steps, expected/actual results, logs, and a screenshot where useful. A blocked test is not a pass. Do not mark any playback item complete from a code review or from this document.
 
 ## Test environment record
 
@@ -19,7 +19,7 @@
 Run on any machine with Rust/Cargo and the Tauri target prerequisites:
 `cargo test --manifest-path src-tauri/Cargo.toml`
 
-These tests have **not** been executed in this workspace (Cargo unavailable) — running them is the first release-blocking step.
+These tests were executed in this packaged-app validation run: 56 passed, 0 failed, 1 ignored (the Windows Shell thumbnail test needs a registered video thumbnail provider).
 
 - Cast grant store: media scoping, wrong-media rejection, empty-token rejection, revocation.
 - Grant expiry: sliding 12-hour renewal, absolute 24-hour ceiling, expired-token rejection.

@@ -60,6 +60,22 @@ export type CacheCleanupResult = {
 
 export const isDesktopApp = () => isTauri()
 
+export async function getLocalStatus(): Promise<{ database_ready: boolean }> {
+  return invoke<{ database_ready: boolean }>('get_local_status')
+}
+
+export function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let amount = value / 1024
+  let unit = 0
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024
+    unit += 1
+  }
+  return `${amount.toFixed(amount >= 100 ? 0 : 1)} ${units[unit]}`
+}
+
 export async function getMediaFiles([, search, extension, sortBy]: readonly [string, string, string, string]) {
   if (!isDesktopApp()) return [] as MediaFile[]
   return invoke<MediaFile[]>('list_media_files', {

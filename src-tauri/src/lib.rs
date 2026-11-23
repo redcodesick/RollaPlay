@@ -179,6 +179,38 @@ fn get_local_status(database: State<'_, AppDatabase>) -> Result<LocalStatus, Str
     Ok(LocalStatus { database_ready: true })
 }
 
+/// Temporary first-run diagnostic sink. The webview console is not visible in
+/// packaged builds, so the wizard forwards redacted control-flow lines here.
+#[tauri::command]
+fn wizard_diag_log(
+    app: tauri::AppHandle,
+    area: String,
+    action: String,
+    details: Option<String>,
+) -> Result<(), String> {
+    let directory = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let clean = |value: &str| value.replace(['\r', '\n'], " ");
+    let line = format!(
+        "{} [{}] {} {}\n",
+        millis,
+        clean(&area),
+        clean(&action),
+        details.map(|value| clean(&value)).unwrap_or_default(),
+    );
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(directory.join("wizard-diagnostics.log"))
+        .map_err(|error| error.to_string())?;
+    use std::io::Write;
+    file.write_all(line.as_bytes()).map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn add_media_directory(database: State<'_, AppDatabase>, path: String) -> Result<MediaDirectory, String> {
     let canonical_path = canonicalize_media_path(Path::new(&path))
@@ -1810,6 +1842,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_local_status,
+            wizard_diag_log,
             add_media_directory,
             list_media_directories,
             remove_media_directory,

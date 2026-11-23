@@ -767,11 +767,14 @@ impl PlaybackEngine {
     }
 
     pub fn delete_playlist(&self, playlist_id: i64) -> Result<(), String> {
-        let connection = self.db();
-        // playlist_items are ON DELETE CASCADE; media files are never touched.
-        let changed = connection
-            .execute("DELETE FROM playlists WHERE id=?1", [playlist_id])
-            .map_err(|error| format!("Could not delete the playlist: {error}"))?;
+        // The database guard must be released before persist() re-locks it.
+        let changed = {
+            let connection = self.db();
+            // playlist_items are ON DELETE CASCADE; media files are never touched.
+            connection
+                .execute("DELETE FROM playlists WHERE id=?1", [playlist_id])
+                .map_err(|error| format!("Could not delete the playlist: {error}"))?
+        };
         if changed == 0 { return Err("That playlist no longer exists.".to_string()); }
         let mut data = self.lock();
         if data.last_selected_playlist_id == Some(playlist_id) {
@@ -782,11 +785,14 @@ impl PlaybackEngine {
     }
 
     pub fn select_playlist(&self, playlist_id: i64) -> Result<(), String> {
-        let connection = self.db();
-        let exists = connection
-            .query_row("SELECT 1 FROM playlists WHERE id=?1", [playlist_id], |_| Ok(()))
-            .optional()
-            .map_err(|error| error.to_string())?;
+        // The database guard must be released before persist() re-locks it.
+        let exists = {
+            let connection = self.db();
+            connection
+                .query_row("SELECT 1 FROM playlists WHERE id=?1", [playlist_id], |_| Ok(()))
+                .optional()
+                .map_err(|error| error.to_string())?
+        };
         if exists.is_none() { return Err("That playlist no longer exists.".to_string()); }
         let mut data = self.lock();
         data.last_selected_playlist_id = Some(playlist_id);
@@ -1400,6 +1406,32 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM media_files WHERE id IN (?1, ?2, ?3)", params![ids[0], ids[1], ids[2]], |row| row.get(0))
             .unwrap();
         assert_eq!(remaining, 3, "deleting a playlist must never delete media files");
+    }
+
+    #[test]
+    fn selecting_and_deleting_the_selected_playlist_do_not_deadlock() {
+        let fixture = Fixture::new();
+        let ids = fixture.media_ids(2);
+        let first = fixture.engine.create_playlist("First".to_string()).unwrap();
+        let second = fixture.engine.create_playlist("Second".to_string()).unwrap();
+        fixture.engine.add_playlist_items(first, &ids).unwrap();
+
+        fixture.engine.select_playlist(first).unwrap();
+        assert_eq!(fixture.engine.snapshot().last_selected_playlist_id, Some(first));
+        fixture.engine.select_playlist(second).unwrap();
+        assert_eq!(fixture.engine.snapshot().last_selected_playlist_id, Some(second));
+        fixture.engine.select_playlist(first).unwrap();
+        fixture.engine.delete_playlist(first).unwrap();
+        assert_eq!(fixture.engine.snapshot().last_selected_playlist_id, None);
+        assert!(fixture.engine.select_playlist(first).is_err());
+        assert_eq!(fixture.engine.list_playlists().unwrap().len(), 1);
+        let remaining: i64 = fixture
+            .database
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM media_files WHERE id IN (?1, ?2)", params![ids[0], ids[1]], |row| row.get(0))
+            .unwrap();
+        assert_eq!(remaining, 2, "playlist operations must never delete media files");
     }
 
     #[test]

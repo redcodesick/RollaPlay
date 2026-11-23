@@ -2,18 +2,17 @@ import { useEffect, useMemo, useState } from 'react'
 import useSWR from 'swr'
 import { listen } from '@tauri-apps/api/event'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
-import { open } from '@tauri-apps/plugin-dialog'
 import {
-  AlertCircle, Cast, Check, Film, FolderOpen, FolderPlus, HardDrive, LoaderCircle,
-  Play, RefreshCw, ShieldCheck, Trash2, X,
+  AlertCircle, Cast, Check, Film, FolderPlus, HardDrive, LoaderCircle,
+  Play, RefreshCw, ShieldCheck, X,
 } from 'lucide-react'
 import {
-  getMediaDirectories, getMediaFiles, getThumbnailSettings, isDesktopApp,
-  type CacheCleanupResult, type MediaDirectory, type MediaFile, type ScanProgress,
-  type ScanResult, type ThumbnailProgress, type ThumbnailSettings,
+  getMediaFiles, getThumbnailSettings, isDesktopApp,
+  type CacheCleanupResult, type MediaFile, type ThumbnailProgress, type ThumbnailSettings,
 } from '../media'
+import { FolderList, useMediaFolders } from './LibraryFolders'
 import {
-  isCastAvailable, isCastSupportedExtension,
+  castDeviceName, getCastPlaybackState, isCastAvailable, isCastSupportedExtension,
 } from '../cast'
 import { playMediaNow, queueAdd } from '../playlist'
 
@@ -109,33 +108,6 @@ function MediaCard({
   )
 }
 
-function FolderRow({
-  directory, progress, onScan, onCancel, onRemove,
-}: {
-  directory: MediaDirectory
-  progress?: ScanProgress
-  onScan: (directory: MediaDirectory) => void
-  onCancel: (directory: MediaDirectory) => void
-  onRemove: (directory: MediaDirectory) => void
-}) {
-  const scanning = progress?.phase === 'scanning'
-  const folderStatus = directory.availability_state === 'temporarily_unavailable'
-    ? 'Drive or folder unavailable · indexed items and playlists are retained'
-    : directory.availability_state === 'partially_unavailable'
-      ? 'Some locations inaccessible · previous entries were preserved'
-      : directory.last_scanned_at
-      ? `Last scanned ${new Date(`${directory.last_scanned_at.replace(' ', 'T')}Z`).toLocaleString()}`
-      : 'Not scanned yet'
-  return (
-    <div className={`library-folder-row ${directory.availability_state !== 'available' ? 'folder-offline' : ''}`}>
-      <span className="folder-row-icon"><FolderOpen size={17} /></span>
-      <span className="folder-row-info"><strong title={directory.path}>{directory.path}</strong><small>{scanning ? `Scanning · ${progress.files_found} videos found · ${progress.inaccessible_entries} inaccessible items` : folderStatus}</small></span>
-      {scanning ? <><span className="folder-scanning"><LoaderCircle size={15} /> Scanning</span><button className="folder-cancel" onClick={() => onCancel(directory)} aria-label={`Cancel scan of ${directory.path}`}><X size={15} /> Cancel</button></> : <button className="folder-action" onClick={() => onScan(directory)} aria-label={`${directory.availability_state !== 'available' ? 'Retry scan' : 'Rescan'} ${directory.path}`}><RefreshCw size={15} /> {directory.availability_state !== 'available' ? 'Retry' : 'Scan'}</button>}
-      <button className="folder-remove" onClick={() => onRemove(directory)} disabled={scanning} aria-label={`Remove ${directory.path} from library`}><Trash2 size={15} /></button>
-    </div>
-  )
-}
-
 export default function MediaLibrary({
   searchQuery, selectedMediaIds, onSelectionChange,
 }: {
@@ -145,74 +117,36 @@ export default function MediaLibrary({
 }) {
   const [extension, setExtension] = useState('')
   const [sortBy, setSortBy] = useState<SortBy>('name')
-  const [scanProgress, setScanProgress] = useState<Record<number, ScanProgress>>({})
-  const [isAdding, setIsAdding] = useState(false)
   const [notice, setNotice] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
   const [castingMediaId, setCastingMediaId] = useState<number | null>(null)
   const isDesktop = isDesktopApp()
   const castReady = isCastAvailable()
+  const folders = useMediaFolders()
   const search = searchQuery.trim()
   const fileKey = useMemo(() => ['media-files', search, extension, sortBy] as const, [search, extension, sortBy])
   const { data: files = [], isLoading: isLoadingFiles, error: filesError, mutate: refreshFiles } = useSWR(fileKey, getMediaFiles)
-  const { data: directories = [], isLoading: isLoadingDirectories, mutate: refreshDirectories } = useSWR('media-directories', getMediaDirectories)
   const { data: thumbnailSettings = { width: 320, height: 180, quality: 82 }, mutate: refreshThumbnailSettings } = useSWR('thumbnail-settings', getThumbnailSettings)
   const totalBytes = files.reduce((total, file) => total + file.size_bytes, 0)
 
   useEffect(() => {
     if (!isDesktop) return
     let disposed = false
-    let unlisteners: (() => void)[] = []
-    Promise.all([
-      listen<ScanProgress>('media-scan-progress', (event) => {
-        setScanProgress((current) => ({ ...current, [event.payload.directory_id]: event.payload }))
-        if (event.payload.phase !== 'scanning') {
-          void refreshFiles()
-          void refreshDirectories()
-        }
-      }),
-      listen<ThumbnailProgress>('thumbnail-generation-progress', () => {
-        void refreshFiles()
-      }),
-    ]).then((stopListening) => {
-      if (disposed) stopListening.forEach((stop) => stop())
+    let stopListening: (() => void) | undefined
+    listen<ThumbnailProgress>('thumbnail-generation-progress', () => {
+      void refreshFiles()
+    }).then((stop) => {
+      if (disposed) stop()
       else {
-        unlisteners = stopListening
+        stopListening = stop
         void invoke('prepare_thumbnail_cache').catch((error) => setErrorMessage(String(error)))
       }
-    }).catch(() => setErrorMessage('Could not listen for library background tasks.'))
+    }).catch(() => setErrorMessage('Could not listen for thumbnail generation progress.'))
     return () => {
       disposed = true
-      unlisteners.forEach((stop) => stop())
+      stopListening?.()
     }
-  }, [isDesktop, refreshFiles, refreshDirectories])
-
-  async function scanDirectory(directory: MediaDirectory) {
-    setErrorMessage('')
-    setNotice('')
-    setScanProgress((current) => ({ ...current, [directory.id]: { directory_id: directory.id, files_found: 0, inaccessible_entries: 0, phase: 'scanning' } }))
-    try {
-      const result = await invoke<ScanResult>('scan_media_directory', { directoryId: directory.id })
-      await Promise.all([refreshFiles(), refreshDirectories()])
-      const summary = result.cancelled
-        ? 'Scan cancelled. No partial index changes were saved.'
-        : `${result.files_indexed} videos indexed${result.renamed_files ? ` · ${result.renamed_files} renamed files matched` : ''}${result.files_removed ? ` · ${result.files_removed} permanently missing` : ''}${result.temporarily_unavailable_files ? ` · ${result.temporarily_unavailable_files} temporarily unavailable` : ''}${result.inaccessible_entries ? ` · ${result.inaccessible_entries} inaccessible locations` : ''}.`
-      setNotice(summary)
-      setScanProgress((current) => ({ ...current, [directory.id]: { directory_id: directory.id, files_found: result.files_indexed, inaccessible_entries: result.inaccessible_entries, phase: result.cancelled ? 'cancelled' : 'complete' } }))
-    } catch (error) {
-      await refreshDirectories()
-      setScanProgress((current) => ({ ...current, [directory.id]: { directory_id: directory.id, files_found: 0, inaccessible_entries: 0, phase: 'temporarily_unavailable' } }))
-      setErrorMessage(typeof error === 'string' ? error : error instanceof Error ? error.message : String(error))
-    }
-  }
-
-  async function cancelScan(directory: MediaDirectory) {
-    try {
-      await invoke('cancel_media_scan', { directoryId: directory.id })
-    } catch (error) {
-      setErrorMessage(typeof error === 'string' ? error : String(error))
-    }
-  }
+  }, [isDesktop, refreshFiles])
 
   async function refreshThumbnail(media: MediaFile) {
     setErrorMessage('')
@@ -245,53 +179,16 @@ export default function MediaLibrary({
     }
   }
 
-  async function addFolders() {
-    if (!isDesktop) return
-    setIsAdding(true)
-    setErrorMessage('')
-    setNotice('')
-    try {
-      const selection = await open({ directory: true, multiple: true, title: 'Choose folders containing videos' })
-      if (!selection) return
-      const paths = Array.isArray(selection) ? selection : [selection]
-      for (const path of paths) {
-        const directory = await invoke<MediaDirectory>('add_media_directory', { path })
-        await refreshDirectories()
-        await scanDirectory(directory)
-      }
-      await refreshFiles()
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error))
-    } finally {
-      setIsAdding(false)
-    }
-  }
-
-  async function removeFolder(directory: MediaDirectory) {
-    const confirmed = window.confirm(`Remove this folder from your library?\n\n${directory.path}\n\nYour video files will not be deleted.`)
-    if (!confirmed) return
-    setErrorMessage('')
-    try {
-      await invoke('remove_media_directory', { directoryId: directory.id })
-      setScanProgress((current) => {
-        const next = { ...current }
-        delete next[directory.id]
-        return next
-      })
-      await Promise.all([refreshDirectories(), refreshFiles()])
-      setNotice('Folder removed from the library. Your files were not changed.')
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error))
-    }
-  }
-
   function castVideo(media: MediaFile) {
     setErrorMessage('')
     setNotice('')
     setCastingMediaId(media.id)
     playMediaNow(media.id)
-      .then(() => {
-        setNotice(`Casting ${media.filename}. Choose ${'“'}Windows Media Station${'”'} in the sender window if the device picker appears.`)
+      .then(async () => {
+        const device = castDeviceName(await getCastPlaybackState().catch(() => null))
+        setNotice(device
+          ? `Casting ${media.filename} to ${device}.`
+          : `Casting ${media.filename}. Choose your TV in the Chrome sender window if it opens.`)
       })
       .catch((error) => {
         setErrorMessage(typeof error === 'string' ? error : error instanceof Error ? error.message : String(error))
@@ -327,9 +224,9 @@ export default function MediaLibrary({
           <h1 id="library-title">Media library<span className="title-period">.</span></h1>
           <p>Browse the videos stored on this device.</p>
         </div>
-        <button className="button-primary add-folder-button" onClick={addFolders} disabled={!isDesktop || isAdding} title={!isDesktop ? 'Available in the installed Windows desktop app' : undefined}>
-          {isAdding ? <LoaderCircle size={17} className="spin-icon" /> : <FolderPlus size={17} />}
-          {isAdding ? 'Adding folders…' : 'Add folder'}
+        <button className="button-primary add-folder-button" onClick={() => void folders.addFolders()} disabled={!isDesktop || folders.isAdding} title={!isDesktop ? 'Available in the installed Windows desktop app' : undefined}>
+          {folders.isAdding ? <LoaderCircle size={17} className="spin-icon" /> : <FolderPlus size={17} />}
+          {folders.isAdding ? 'Adding folders…' : 'Add folder'}
         </button>
       </header>
 
@@ -339,14 +236,24 @@ export default function MediaLibrary({
 
       <div className="library-stats" aria-label="Library statistics">
         <div><span>VIDEOS</span><strong>{files.length}</strong></div>
-        <div><span>FOLDERS</span><strong>{directories.length}</strong></div>
+        <div><span>FOLDERS</span><strong>{folders.directories.length}</strong></div>
         <div><span>INDEXED SIZE</span><strong>{formatBytes(totalBytes)}</strong></div>
-        <div className="scan-state"><span>INDEX STATUS</span><strong><i className={Object.values(scanProgress).some((progress) => progress.phase === 'scanning') ? 'scanning' : ''} />{Object.values(scanProgress).some((progress) => progress.phase === 'scanning') ? 'Scanning folders' : 'Ready'}</strong></div>
+        <div className="scan-state"><span>INDEX STATUS</span><strong><i className={Object.values(folders.scanProgress).some((progress) => progress.phase === 'scanning') ? 'scanning' : ''} />{Object.values(folders.scanProgress).some((progress) => progress.phase === 'scanning') ? 'Scanning folders' : 'Ready'}</strong></div>
       </div>
 
       <section className="folder-section" aria-labelledby="folders-title">
-        <div className="library-subheading"><div><h2 id="folders-title">Library folders</h2><p>Choose which folders are indexed. Removing one never deletes your files.</p></div><span>{directories.length} {directories.length === 1 ? 'FOLDER' : 'FOLDERS'}</span></div>
-        {isLoadingDirectories ? <div className="library-loading"><LoaderCircle size={17} className="spin-icon" /> Loading folders…</div> : directories.length ? <div className="library-folder-list">{directories.map((directory) => <FolderRow key={directory.id} directory={directory} progress={scanProgress[directory.id]} onScan={scanDirectory} onCancel={cancelScan} onRemove={removeFolder} />)}</div> : <div className="library-empty-folders"><FolderPlus size={19} /><span>No media folders yet.</span><button onClick={addFolders} disabled={!isDesktop}>Add a folder to begin</button></div>}
+        <div className="library-subheading"><div><h2 id="folders-title">Library folders</h2><p>Choose which folders are indexed. Removing one never deletes your files.</p></div><span>{folders.directories.length} {folders.directories.length === 1 ? 'FOLDER' : 'FOLDERS'}</span></div>
+        {folders.messages}
+        <FolderList
+          directories={folders.directories}
+          isLoading={folders.isLoadingDirectories}
+          scanProgress={folders.scanProgress}
+          onScan={(directory) => void folders.scanDirectory(directory)}
+          onCancel={(directory) => void folders.cancelScan(directory)}
+          onRemove={(directory) => void folders.removeFolder(directory)}
+          onAdd={() => void folders.addFolders()}
+          addDisabled={!isDesktop}
+        />
       </section>
 
       <section className="thumbnail-settings" aria-labelledby="thumbnail-settings-title">
@@ -383,7 +290,7 @@ export default function MediaLibrary({
           <span className="selection-hint">Create or extend playlists from the Playlists panel.</span>
           {selectedMediaIds.length > 0 && <button className="selection-clear" onClick={() => onSelectionChange([])}><X size={14} /> Clear</button>}
         </div>
-        {filesError ? <div className="library-empty-results"><AlertCircle size={20} /><strong>Could not load the library</strong><span>Try reopening the application. Your indexed files are stored on this device.</span></div> : isLoadingFiles ? <div className="library-loading"><LoaderCircle size={17} className="spin-icon" /> Loading videos…</div> : files.length ? <div className="media-grid">{files.map((media) => <MediaCard key={media.id} media={media} onRefresh={refreshThumbnail} onCast={castVideo} castReady={castReady} isCasting={castingMediaId === media.id} selected={selectedMediaIds.includes(media.id)} onToggleSelect={toggleSelect} />)}</div> : <div className="library-empty-results"><span className="empty-results-icon"><HardDrive size={22} /></span><strong>{search || extension ? 'No matching videos' : 'Your video collection is empty'}</strong><span>{search || extension ? 'Try a different search or format filter.' : 'Add a folder and scan it to see your videos here.'}</span>{!directories.length && <button className="button-primary" onClick={addFolders} disabled={!isDesktop}><FolderPlus size={16} /> Add media folder</button>}</div>}
+        {filesError ? <div className="library-empty-results"><AlertCircle size={20} /><strong>Could not load the library</strong><span>Try reopening the application. Your indexed files are stored on this device.</span></div> : isLoadingFiles ? <div className="library-loading"><LoaderCircle size={17} className="spin-icon" /> Loading videos…</div> : files.length ? <div className="media-grid">{files.map((media) => <MediaCard key={media.id} media={media} onRefresh={refreshThumbnail} onCast={castVideo} castReady={castReady} isCasting={castingMediaId === media.id} selected={selectedMediaIds.includes(media.id)} onToggleSelect={toggleSelect} />)}</div> : <div className="library-empty-results"><span className="empty-results-icon"><HardDrive size={22} /></span><strong>{search || extension ? 'No matching videos' : 'Your video collection is empty'}</strong><span>{search || extension ? 'Try a different search or format filter.' : 'Add a folder and scan it to see your videos here.'}</span>{!folders.directories.length && <button className="button-primary" onClick={() => void folders.addFolders()} disabled={!isDesktop}><FolderPlus size={16} /> Add media folder</button>}</div>}
       </section>
     </section>
   )

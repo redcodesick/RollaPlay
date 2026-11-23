@@ -119,14 +119,20 @@
     return hours > 0 ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${minutes}:${pad(rest)}`;
   }
 
-  function deviceName() {
+  /* Returns the friendly receiver name only when a real session exists. */
+  function activeDeviceName() {
     try {
-      const session = context && context.getCurrentSession();
-      const device = session && typeof session.getCastDevice === 'function' ? session.getCastDevice() : null;
+      const session = context && typeof context.getCurrentSession === 'function' ? context.getCurrentSession() : null;
+      if (!session) return null;
+      const device = typeof session.getCastDevice === 'function' ? session.getCastDevice() : null;
       return (device && device.friendlyName) || 'Cast device';
     } catch (_) {
-      return 'Cast device';
+      return null;
     }
+  }
+
+  function deviceName() {
+    return activeDeviceName() || 'Cast device';
   }
 
   function tryInitFramework() {
@@ -188,8 +194,9 @@
     elements['cast-state-text'].textContent = label;
     elements['pick-device'].disabled = !frameworkReady || state === 'NO_DEVICES_AVAILABLE';
     setDot('cast-dot', state === 'CONNECTED' ? 'ok' : state === 'NO_DEVICES_AVAILABLE' ? 'bad' : state === 'CONNECTING' ? 'warn' : '');
-    elements['headline'].textContent = state === 'CONNECTED' ? 'Casting to ' + deviceName() : 'Choose a Cast device';
-    post({ type: 'cast_state', state: clampText(state, 40) });
+    const connectedDevice = activeDeviceName();
+    elements['headline'].textContent = connectedDevice ? 'Casting to ' + connectedDevice : 'Choose a Cast device';
+    post({ type: 'cast_state', state: clampText(state, 40), device_name: activeDeviceName() });
   }
 
   function onSessionStateChanged(event) {
@@ -261,6 +268,7 @@
         player_state: 'IDLE',
         position_seconds: 0,
         duration_seconds: 0,
+        device_name: activeDeviceName(),
         playback_token: currentPlaybackToken,
         cast_session_id: currentCastSessionId,
         media_session_id: currentMediaSessionId,
@@ -272,6 +280,7 @@
       player_state: clampText(player.playerState, 30) || 'IDLE',
       position_seconds: Number.isFinite(player.currentTime) ? player.currentTime : 0,
       duration_seconds: Number.isFinite(player.duration) ? player.duration : 0,
+      device_name: activeDeviceName(),
       volume_level: Number.isFinite(player.volumeLevel) ? player.volumeLevel : 1,
       muted: !!player.isMuted,
       playback_token: currentPlaybackToken,
@@ -532,11 +541,20 @@
   function bindLocalControls() {
     elements['pick-device'].addEventListener('click', () => {
       if (!context) return;
+      const existingDevice = activeDeviceName();
+      if (existingDevice) {
+        setStatus('Already casting to ' + existingDevice + '. You do not need to choose a device again.', false);
+        return;
+      }
       context.requestSession().catch((error) => {
         const code = error && error.code;
-        if (code !== 'cancel') {
-          setStatus('Could not open the device picker (' + String(code || error) + ').', true);
-        }
+        if (code === 'cancel') return;
+        // Some Chrome/Cast SDK combinations reject requestSession() with
+        // invalid_parameter after auto-joining an available receiver. A live
+        // session means the picker achieved the user's intent, so do not
+        // present a false failure.
+        if (context.getCurrentSession()) return;
+        setStatus('Could not open the device picker (' + String(code || error) + ').', true);
       });
     });
     elements['play-pause'].addEventListener('click', () => applyControl({ type: 'control', action: 'toggle_play' }));
