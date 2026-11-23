@@ -1,6 +1,6 @@
 # Windows Media Station — Phase 4 Cast Testing Checklist
 
-**Status: discovery and live session verified on a real receiver; playback/completion checklist still to run.** The workspace is Windows with Rust/Cargo, Node/pnpm and Chrome 157.0.8103.79. The packaged app discovered a Chromecast-enabled receiver named `Living Room TV` and reported `SESSION_STARTED` with that device after fixing the sender CSP (see [docs/windows-validation.md](docs/windows-validation.md)). This proves discovery and session establishment only; it does **not** prove media playback, receiving-side decoding, or `IdleReason.FINISHED` completion. Every playback item below must still be executed on real hardware before Phase 4 is considered done. Record **Pass / Fail / Blocked** with steps, expected/actual results, logs, and a screenshot where useful. A blocked test is not a pass. Do not mark any playback item complete from a code review or from this document.
+**Status: discovery, live session and completion correlation fix implemented; playback/completion checklist still to run on hardware.** The workspace is Windows with Rust/Cargo, Node/pnpm and Chrome 157.0.8103.79. The packaged app discovered a Chromecast-enabled receiver named `Living Room TV` and reported `SESSION_STARTED` with that device after fixing the sender CSP (see [docs/windows-validation.md](docs/windows-validation.md)). This proves discovery and session establishment only; it does **not** prove media playback, receiving-side decoding, or `IdleReason.FINISHED` completion on hardware. The completion path was fixed after finding that a receiver assigns a new `mediaSessionId` to every load: the engine no longer keeps the previous item's ids, and the sender posts `idle_reason` on status events plus a proactive `FINISHED` check on the underlying Media object. Every playback item below must still be executed on real hardware before Phase 4 is considered done. Record **Pass / Fail / Blocked** with steps, expected/actual results, logs, and a screenshot where useful. A blocked test is not a pass. Do not mark any playback item complete from a code review or from this document.
 
 ## Test environment record
 
@@ -19,7 +19,7 @@
 Run on any machine with Rust/Cargo and the Tauri target prerequisites:
 `cargo test --manifest-path src-tauri/Cargo.toml`
 
-These tests were executed in this packaged-app validation run: 57 passed, 0 failed, 1 ignored (the Windows Shell thumbnail test needs a registered video thumbnail provider). The new `playing_a_whole_playlist_auto_advances_on_real_completion` test covers whole-playlist automatic advancement on a correlated receiver completion event.
+These tests were executed in this packaged-app validation run: 60 passed, 0 failed, 1 ignored (the Windows Shell thumbnail test needs a registered video thumbnail provider). Whole-playlist automatic advancement is covered on a correlated receiver completion event, including a receiver changing `mediaSessionId` between items, `FINISHED` arriving only on `media_status`, and ids first arriving on `media_loaded`.
 
 - Cast grant store: media scoping, wrong-media rejection, empty-token rejection, revocation.
 - Grant expiry: sliding 12-hour renewal, absolute 24-hour ceiling, expired-token rejection.
@@ -77,6 +77,10 @@ These tests were executed in this packaged-app validation run: 57 passed, 0 fail
 - [ ] 22. Confirm the sender bridge listens only on `127.0.0.1` (e.g. `netstat -ano | findstr 879`): no LAN binding; a second LAN device cannot load the sender page.
 - [ ] 23. Confirm no token leakage: reveal the pairing token in Settings, run a cast, and search the Cast panel diagnostics, sender window, and any logs for the token value — it must never appear. The scoped URL must never be rendered in the sender page DOM.
 - [ ] 24. Confirm administrative actions (start/stop server, port changes, sender launch) are only available through the Tauri UI; the media server HTTP surface still exposes only `/media/{id}`, `/health`, and now the media-scoped `cast_token` query acceptance.
+
+### Whole-playlist completion
+
+- [ ] 25. Play a saved playlist with three short, supported files in Automatic mode. Each item must advance only after the receiver reports `IdleReason.FINISHED` for **that** load, with a changing `mediaSessionId` and a matching playback token. No timer or estimated duration may advance the queue. Repeat One, Repeat All, Manual wait, and a late `FINISHED` from the previous item must behave as documented.
 
 ## Known limitations to document when testing
 

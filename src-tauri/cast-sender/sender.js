@@ -58,6 +58,10 @@
   let currentPlaybackToken = null;
   let currentCastSessionId = null;
   let currentMediaSessionId = null;
+  // The media session id of the load that produced currentPlaybackToken. A
+  // receiver assigns a new id to every load; a FINISHED state from the previous
+  // media object must never complete the next playlist entry.
+  let activeLoadMediaSessionId = null;
   let activeMediaSession = null;
   let completionPosted = false;
 
@@ -245,6 +249,7 @@
       post({ type: 'session_start_failed', session_state: clampText(sessionState, 40), error_code: clampText(errorCode, 80), message: clampText('The Cast session did not start (' + String(errorCode || 'unknown error') + ').', 380) });
     } else if (sessionState === 'SESSION_ENDED' || sessionState === 'SESSION_ENDING') {
       if (sessionState === 'SESSION_ENDED') {
+        activeLoadMediaSessionId = null;
         elements['device-name'].textContent = 'None';
         elements['now-playing'].hidden = true;
         post({
@@ -272,6 +277,7 @@
         playback_token: currentPlaybackToken,
         cast_session_id: currentCastSessionId,
         media_session_id: currentMediaSessionId,
+        idle_reason: currentIdleReason(),
       });
       return;
     }
@@ -286,6 +292,7 @@
       playback_token: currentPlaybackToken,
       cast_session_id: currentCastSessionId,
       media_session_id: currentMediaSessionId,
+      idle_reason: currentIdleReason(),
     });
   }
 
@@ -313,7 +320,9 @@
 
   function onRemotePlayerEvent() {
     renderMedia();
+    attachMediaSessionListener();
     postStatus(false);
+    checkFinished();
   }
 
   /* Phase 5: completion comes from the real Cast SDK media status. RemotePlayer
@@ -339,26 +348,70 @@
     media.addEventListener(chrome.cast.media.MediaEventType.MEDIA_STATUS_UPDATED, onMediaStatusUpdated);
   }
 
+  function idleReasonFrom(media) {
+    if (!media) return null;
+    const reason = media.idleReason || (media.status && media.status.idleReason) || null;
+    return reason ? String(reason).slice(0, 40) : null;
+  }
+
+  function isFinishedReason(reason) {
+    if (reason === 'FINISHED') return true;
+    return !!(window.chrome && chrome.cast && chrome.cast.media && chrome.cast.media.IdleReason &&
+      reason === chrome.cast.media.IdleReason.FINISHED);
+  }
+
+  /* A receiver keeps the last media object (with idleReason=FINISHED) around
+   * briefly after a new load. Only report completion for the media session that
+   * belongs to the current playback token. */
+  function isActiveMedia(media) {
+    if (!media || activeLoadMediaSessionId === null) return false;
+    if (!Number.isFinite(media.mediaSessionId)) return true;
+    return media.mediaSessionId === activeLoadMediaSessionId;
+  }
+
+  function postFinished(media) {
+    if (completionPosted || !isActiveMedia(media)) return;
+    const idleReason = idleReasonFrom(media);
+    if (!isFinishedReason(idleReason)) return;
+    completionPosted = true;
+    post({
+      type: 'media_completed',
+      playback_token: currentPlaybackToken,
+      cast_session_id: currentCastSessionId,
+      media_session_id: Number.isFinite(media.mediaSessionId) ? media.mediaSessionId : currentMediaSessionId,
+      position_seconds: Number.isFinite(media.currentTime) ? media.currentTime :
+        (player && Number.isFinite(player.currentTime) ? player.currentTime : 0),
+      duration_seconds: Number.isFinite(media.duration) ? media.duration :
+        (player && Number.isFinite(player.duration) ? player.duration : 0),
+      idle_reason: 'FINISHED',
+    });
+  }
+
+  function checkFinished() {
+    if (completionPosted) return;
+    const media = correlation();
+    if (!media) return;
+    attachMediaSessionListener();
+    postFinished(media);
+  }
+
+  function currentIdleReason() {
+    const media = correlation();
+    const reason = idleReasonFrom(media);
+    if (!reason) return null;
+    // Do not leak a stale FINISHED from the previous item into a new load.
+    return isFinishedReason(reason) && !isActiveMedia(media) ? null : reason;
+  }
+
   function onMediaStatusUpdated(event) {
     attachMediaSessionListener();
     const media = (event && event.data) || activeMediaSession || correlation();
     if (!media) return;
     if (Number.isFinite(media.mediaSessionId)) currentMediaSessionId = media.mediaSessionId;
-    const idleReason = media.idleReason || null;
-    if (idleReason === chrome.cast.media.IdleReason.FINISHED && !completionPosted) {
-      completionPosted = true;
-      post({
-        type: 'media_completed',
-        playback_token: currentPlaybackToken,
-        cast_session_id: currentCastSessionId,
-        media_session_id: currentMediaSessionId,
-        position_seconds: Number.isFinite(media.currentTime) ? media.currentTime :
-          (player && Number.isFinite(player.currentTime) ? player.currentTime : 0),
-        duration_seconds: Number.isFinite(media.duration) ? media.duration :
-          (player && Number.isFinite(player.duration) ? player.duration : 0),
-        idle_reason: idleReason,
-      });
-    } else if (idleReason && idleReason !== chrome.cast.media.IdleReason.FINISHED) {
+    const idleReason = idleReasonFrom(media);
+    if (isFinishedReason(idleReason)) {
+      postFinished(media);
+    } else if (idleReason) {
       // A new load resets the completion latch for the next item.
       completionPosted = false;
     }
@@ -405,6 +458,7 @@
     pendingDeviceRequested = false;
     currentPlaybackToken = clampText(command.playback_token, 80) || null;
     completionPosted = false;
+    activeLoadMediaSessionId = null;
     try {
       const mediaInfo = new chrome.cast.media.MediaInfo(command.url, clampText(command.mime_type, 80) || 'video/mp4');
       const metadata = new chrome.cast.media.MovieMediaMetadata();
@@ -418,6 +472,7 @@
           elements['now-playing'].hidden = false;
           setStatus('Playing on ' + deviceName() + '. Control playback from Windows Media Station.', false);
           correlation();
+          activeLoadMediaSessionId = currentMediaSessionId;
           attachMediaSessionListener();
           post({
             type: 'media_loaded',
@@ -426,6 +481,7 @@
             media_session_id: currentMediaSessionId,
           });
           postStatus(true);
+          checkFinished();
         })
         .catch((error) => {
           const message = friendlyLoadError(error);

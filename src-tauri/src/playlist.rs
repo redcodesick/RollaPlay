@@ -675,6 +675,11 @@ impl PlaybackEngine {
         let token = Uuid::new_v4().to_string();
         data.current_entry_id = Some(entry.entry_id.clone());
         data.current_token = Some(token.clone());
+        // The receiver assigns a fresh media session id to every load. Keeping
+        // the previous item's ids would make its late FINISHED event look like
+        // a valid completion for this new token and stall the whole playlist.
+        data.cast_session_id = None;
+        data.media_session_id = None;
         data.position_seconds = position_seconds.max(0.0);
         data.duration_seconds = entry.duration_seconds;
         data.state = EngineState::Loading;
@@ -1126,6 +1131,84 @@ impl PlaybackEngine {
     // Cast event processing (the only progression trigger)
     // -----------------------------------------------------------------------
 
+    /// Correlation requires agreement only when both sides reported an id.
+    /// The token is mandatory and unique per load; a receiver that omits an id
+    /// in one status event must not make the next item unfinishable.
+    fn cast_ids_match(data: &EngineStateData, event: &CastStatusEvent) -> bool {
+        if let (Some(stored), Some(reported)) =
+            (data.cast_session_id.as_deref(), event.cast_session_id.as_deref())
+        {
+            if stored != reported {
+                return false;
+            }
+        }
+        if let (Some(stored), Some(reported)) = (data.media_session_id, event.media_session_id) {
+            if stored != reported {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Advances one queue entry from a real `IdleReason.FINISHED` event. Both
+    /// the dedicated `media_completed` event and a `media_status` event carrying
+    /// `idle_reason: "FINISHED"` use this path; the completion token latch makes
+    /// duplicates harmless.
+    fn complete_current(&self, event: &CastStatusEvent, effects: &mut Vec<EngineEffect>) -> bool {
+        let (token, repeat, mode, current_entry_id) = {
+            let mut data = self.lock();
+            let Some(token) = data.current_token.clone() else {
+                return false;
+            };
+            if event.playback_token.as_deref() != Some(token.as_str()) {
+                return false;
+            }
+            if !Self::cast_ids_match(&data, event) {
+                return false;
+            }
+            if data.last_completion_token.as_deref() == Some(token.as_str()) {
+                return false;
+            }
+            if let Some(position) = event.position_seconds.filter(|value| value.is_finite() && *value >= 0.0) {
+                data.position_seconds = position;
+            }
+            if event.cast_session_id.is_some() {
+                data.cast_session_id = event.cast_session_id.clone();
+            }
+            if event.media_session_id.is_some() {
+                data.media_session_id = event.media_session_id;
+            }
+            (token, data.repeat, data.mode, data.current_entry_id.clone())
+        };
+        {
+            let mut data = self.lock();
+            data.last_completion_token = Some(token);
+            data.state = EngineState::Completed;
+            data.message = Some("Video completed.".to_string());
+        }
+        self.finish_current(true, effects);
+        effects.push(EngineEffect::Notify { level: "success".to_string(), message: "Video completed.".to_string() });
+        match repeat {
+            RepeatMode::One => {
+                if let Some(id) = current_entry_id {
+                    let index = { self.lock().queue.iter().position(|entry| entry.entry_id == id) };
+                    if let Some(index) = index {
+                        self.begin_entry(index, 0.0, effects);
+                    }
+                }
+            }
+            _ if mode == PlaybackMode::Auto => self.next_inside_completion(effects),
+            _ => {
+                let mut data = self.lock();
+                data.state = EngineState::WaitingForManualSelection;
+                data.message = Some("Waiting for manual selection.".to_string());
+                effects.push(EngineEffect::Notify { level: "info".to_string(), message: "Waiting for manual selection.".to_string() });
+                self.persist(&data);
+            }
+        }
+        true
+    }
+
     pub fn on_cast_event(&self, event: CastStatusEvent) -> Vec<EngineEffect> {
         let mut effects = Vec::new();
         let kind = event.kind.as_str();
@@ -1171,50 +1254,25 @@ impl PlaybackEngine {
             }
             return effects;
         }
-        if kind == "media_completed" {
-            let mut data = self.lock();
-            let Some(token) = data.current_token.clone() else { return effects };
-            if event.playback_token.as_deref() != Some(token.as_str()) { return effects; }
-            // A completion is trusted only when BOTH sides agree on the Cast
-            // session and the media session. The token prevents stale loads,
-            // while these ids prevent a different receiver/session event from
-            // completing the current queue entry.
-            if data.cast_session_id.as_deref() != event.cast_session_id.as_deref() { return effects; }
-            if data.media_session_id != event.media_session_id { return effects; }
-            if data.last_completion_token.as_deref() == Some(token.as_str()) { return effects; }
-            // Position from the receiver is authoritative for this item.
-            if let Some(position) = event.position_seconds.filter(|value| value.is_finite() && *value >= 0.0) {
-                data.position_seconds = position;
-            }
-            let repeat = data.repeat;
-            let mode = data.mode;
-            let current_entry_id = data.current_entry_id.clone();
-            drop(data);
-            {
+        if kind == "media_loaded" {
+            // Capture the ids assigned by the receiver to this exact load. This
+            // keeps completion correlated even when a short video finishes
+            // before a periodic status event is received.
+            let token_matches = event.playback_token.as_deref()
+                .map(|token| self.lock().current_token.as_deref() == Some(token))
+                .unwrap_or(false);
+            if token_matches {
                 let mut data = self.lock();
-                data.last_completion_token = Some(token);
-                data.state = EngineState::Completed;
-                data.message = Some("Video completed.".to_string());
+                if let Some(session_id) = event.cast_session_id { data.cast_session_id = Some(session_id); }
+                if let Some(media_id) = event.media_session_id { data.media_session_id = Some(media_id); }
+                self.persist(&data);
             }
-            self.finish_current(true, &mut effects);
-            effects.push(EngineEffect::Notify { level: "success".to_string(), message: "Video completed.".to_string() });
-            match repeat {
-                RepeatMode::One => {
-                    if let Some(id) = current_entry_id {
-                        let index = { self.lock().queue.iter().position(|entry| entry.entry_id == id) };
-                        if let Some(index) = index {
-                            self.begin_entry(index, 0.0, &mut effects);
-                        }
-                    }
-                }
-                _ if mode == PlaybackMode::Auto => self.next_inside_completion(&mut effects),
-                _ => {
-                    let mut data = self.lock();
-                    data.state = EngineState::WaitingForManualSelection;
-                    data.message = Some("Waiting for manual selection.".to_string());
-                    effects.push(EngineEffect::Notify { level: "info".to_string(), message: "Waiting for manual selection.".to_string() });
-                    self.persist(&data);
-                }
+            return effects;
+        }
+        let finished = event.idle_reason.as_deref() == Some("FINISHED");
+        if kind == "media_completed" {
+            if finished {
+                self.complete_current(&event, &mut effects);
             }
             return effects;
         }
@@ -1236,7 +1294,7 @@ impl PlaybackEngine {
                     let _ = connection.execute("UPDATE media_files SET duration_seconds=?1 WHERE id=?2", params![duration, id]);
                 }
             }
-            if let Some(session_id) = event.cast_session_id { data.cast_session_id = Some(session_id); }
+            if let Some(session_id) = event.cast_session_id.clone() { data.cast_session_id = Some(session_id); }
             if let Some(media_id) = event.media_session_id { data.media_session_id = Some(media_id); }
             data.state = match event.player_state.as_deref() {
                 Some("PLAYING") => EngineState::Playing,
@@ -1246,6 +1304,10 @@ impl PlaybackEngine {
                 _ => data.state,
             };
             self.persist(&data);
+            drop(data);
+            if finished {
+                self.complete_current(&event, &mut effects);
+            }
         }
         effects
     }
@@ -1379,6 +1441,60 @@ mod tests {
                 message: None,
             }
         }
+
+        fn status_with_ids(
+            token: &str,
+            state: &str,
+            position: f64,
+            cast_session_id: &str,
+            media_session_id: i64,
+        ) -> CastStatusEvent {
+            CastStatusEvent {
+                cast_session_id: Some(cast_session_id.to_string()),
+                media_session_id: Some(media_session_id),
+                ..Self::status(token, state, position)
+            }
+        }
+
+        fn finishes_with_ids(
+            token: &str,
+            cast_session_id: &str,
+            media_session_id: i64,
+        ) -> CastStatusEvent {
+            CastStatusEvent {
+                kind: "media_completed".to_string(),
+                cast_session_id: Some(cast_session_id.to_string()),
+                media_session_id: Some(media_session_id),
+                ..Self::completes(token)
+            }
+        }
+
+        fn loaded_with_ids(
+            token: &str,
+            cast_session_id: &str,
+            media_session_id: i64,
+        ) -> CastStatusEvent {
+            CastStatusEvent {
+                kind: "media_loaded".to_string(),
+                playback_token: Some(token.to_string()),
+                cast_session_id: Some(cast_session_id.to_string()),
+                media_session_id: Some(media_session_id),
+                ..Default::default()
+            }
+        }
+
+        fn finished_status(
+            token: &str,
+            cast_session_id: &str,
+            media_session_id: i64,
+        ) -> CastStatusEvent {
+            CastStatusEvent {
+                kind: "media_status".to_string(),
+                player_state: Some("IDLE".to_string()),
+                idle_reason: Some("FINISHED".to_string()),
+                ..Self::status_with_ids(token, "IDLE", 120.0, cast_session_id, media_session_id)
+            }
+        }
     }
 
     #[test]
@@ -1429,6 +1545,70 @@ mod tests {
         let snapshot = fixture.engine.snapshot();
         assert_eq!(snapshot.mode, PlaybackMode::Auto);
         assert_eq!(snapshot.current_entry_id.as_ref().unwrap(), &snapshot.queue[1].entry_id);
+    }
+
+    #[test]
+    fn playlist_advances_when_receiver_changes_media_session_id_per_item() {
+        let fixture = Fixture::new();
+        let ids = fixture.media_ids(3);
+        let playlist_id = fixture.engine.create_playlist("Changing media sessions".to_string()).unwrap();
+        fixture.engine.add_playlist_items(playlist_id, &ids).unwrap();
+        fixture.engine.queue_clear().unwrap();
+        fixture.engine.set_mode(PlaybackMode::Auto).unwrap();
+        let effects = fixture.engine.queue_add_playlist(playlist_id, AddMode::PlayNow).unwrap();
+        let (_, _, first_token) = Fixture::load_effect(&effects);
+
+        // A real receiver assigns a new mediaSessionId to every load. Each item
+        // must be completed with its own ids, not the previous item's ids.
+        fixture.engine.on_cast_event(Fixture::status_with_ids(&first_token, "PLAYING", 5.0, "receiver-1", 11));
+        fixture.engine.on_cast_event(Fixture::finishes_with_ids(&first_token, "receiver-1", 11));
+        let snapshot = fixture.engine.snapshot();
+        assert_eq!(snapshot.current_entry_id.as_ref().unwrap(), &snapshot.queue[1].entry_id);
+        assert_eq!(snapshot.media_session_id, None, "the next load must not inherit the previous media session");
+
+        let second_token = snapshot.playback_token.clone().unwrap();
+        fixture.engine.on_cast_event(Fixture::loaded_with_ids(&second_token, "receiver-1", 12));
+        fixture.engine.on_cast_event(Fixture::status_with_ids(&second_token, "PLAYING", 3.0, "receiver-1", 12));
+        fixture.engine.on_cast_event(Fixture::finishes_with_ids(&second_token, "receiver-1", 12));
+        let snapshot = fixture.engine.snapshot();
+        assert_eq!(snapshot.current_entry_id.as_ref().unwrap(), &snapshot.queue[2].entry_id);
+    }
+
+    #[test]
+    fn media_status_with_finished_idle_reason_advances_without_separate_completion_event() {
+        let fixture = Fixture::new();
+        let ids = fixture.media_ids(2);
+        fixture.engine.queue_add(ids, AddMode::Append).unwrap();
+        fixture.engine.set_mode(PlaybackMode::Auto).unwrap();
+        let first = fixture.engine.snapshot().queue[0].entry_id.clone();
+        let effects = fixture.engine.play_now(first.clone()).unwrap();
+        let (_, _, token) = Fixture::load_effect(&effects);
+
+        fixture.engine.on_cast_event(Fixture::loaded_with_ids(&token, "receiver-1", 21));
+        // Some SDK/event combinations only surface FINISHED on the underlying
+        // Media object while polling status; that must still advance the queue.
+        fixture.engine.on_cast_event(Fixture::finished_status(&token, "receiver-1", 21));
+        let snapshot = fixture.engine.snapshot();
+        assert_eq!(snapshot.current_entry_id.as_ref().unwrap(), &snapshot.queue[1].entry_id);
+        assert_eq!(snapshot.last_completion_token.as_deref(), Some(token.as_str()));
+    }
+
+    #[test]
+    fn media_loaded_captures_ids_when_a_short_video_finishes_before_status() {
+        let fixture = Fixture::new();
+        let ids = fixture.media_ids(2);
+        fixture.engine.queue_add(ids, AddMode::Append).unwrap();
+        fixture.engine.set_mode(PlaybackMode::Auto).unwrap();
+        let first = fixture.engine.snapshot().queue[0].entry_id.clone();
+        let effects = fixture.engine.play_now(first).unwrap();
+        let (_, _, token) = Fixture::load_effect(&effects);
+
+        fixture.engine.on_cast_event(Fixture::loaded_with_ids(&token, "receiver-2", 31));
+        fixture.engine.on_cast_event(Fixture::finishes_with_ids(&token, "receiver-2", 31));
+        assert_eq!(
+            fixture.engine.snapshot().current_entry_id.as_ref().unwrap(),
+            &fixture.engine.snapshot().queue[1].entry_id
+        );
     }
 
     #[test]
@@ -1496,12 +1676,16 @@ mod tests {
         let first = fixture.engine.snapshot().queue[0].entry_id.clone();
         let effects = fixture.engine.play_now(first.clone()).unwrap();
         let (_, _, token) = Fixture::load_effect(&effects);
+        fixture.engine.on_cast_event(Fixture::loaded_with_ids(&token, "receiver-1", 7));
 
         // Wrong token and mismatched session must never advance.
         fixture.engine.on_cast_event(Fixture::completes("stale-token"));
         let mut stale = Fixture::completes(&token);
         stale.cast_session_id = Some("different-receiver".to_string());
         fixture.engine.on_cast_event(stale);
+        let mut stale_media = Fixture::completes(&token);
+        stale_media.media_session_id = Some(999);
+        fixture.engine.on_cast_event(stale_media);
         assert_eq!(fixture.engine.snapshot().current_entry_id, Some(first.clone()));
 
         // A repeated event for the same load must not advance twice.
