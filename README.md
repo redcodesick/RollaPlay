@@ -62,6 +62,10 @@ Cross-platform Rust unit tests cover cache safety/invalidation, migrations, scan
 
 The browser preview can verify UI layout and interactions only. Folder scanning, Tauri commands, Windows Shell extraction, drive-unplug behavior, Chrome sender behavior, real Cast discovery, and installer behavior require the native desktop app.
 
+## License
+
+RollaPlay is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) (SPDX: `PolyForm-Noncommercial-1.0.0`). Use, changes, and distribution are permitted for noncommercial purposes; commercial use requires a separate agreement with the licensor.
+
 ## Validation status
 
 On Windows the frontend build, Rust tests (77 passed, 1 ignored), and packaged NSIS/MSI builds have all been verified; recorded results are in [docs/windows-validation.md](docs/windows-validation.md). Receiver hardware checks are still outstanding: real Chrome launch, TV discovery, visible seek progress, and `IdleReason.FINISHED` playlist advancement must be exercised on a live Cast session using [docs/cast-testing.md](docs/cast-testing.md).
