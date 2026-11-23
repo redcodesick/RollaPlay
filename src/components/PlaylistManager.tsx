@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useSWRConfig } from 'swr'
 import {
   AlertCircle, Check, ChevronRight, GripVertical, ListMusic, LoaderCircle, Play, Plus,
   RefreshCw, SkipForward, Trash2, X,
@@ -24,10 +25,12 @@ export default function PlaylistManager({
   selectedMediaIds, onNotice, onSelectionConsumed, compact = false,
 }: Props) {
   const available = isPlaylistAvailable()
+  const { mutate: mutateGlobal } = useSWRConfig()
   const titleId = useId()
   const [playlists, setPlaylists] = useState<PlaylistSummary[]>([])
   const [selectedPlaylist, setSelectedPlaylist] = useState<number | null>(null)
   const selectedPlaylistRef = useRef<number | null>(null)
+  const preferredRefreshRef = useRef<number | null>(null)
   const [items, setItems] = useState<PlaylistItem[]>([])
   const [newName, setNewName] = useState('')
   const [renaming, setRenaming] = useState<number | null>(null)
@@ -42,17 +45,25 @@ export default function PlaylistManager({
     try {
       const [all, state] = await Promise.all([listPlaylists(), getPlaybackState()])
       setPlaylists(all)
-      const preferred = state.last_selected_playlist_id
+      // A freshly created/selected playlist wins over possibly stale playback
+      // state; otherwise the new playlist looked like it was never created.
+      const preferred = preferredRefreshRef.current
+        ?? state.last_selected_playlist_id
         ?? all.find((playlist) => playlist.id === selectedPlaylistRef.current)?.id
         ?? all[0]?.id
         ?? null
       setSelectedPlaylist(preferred)
       if (preferred == null) setItems([])
       debugLog('playlists', 'refresh', { count: all.length, selectedPlaylist: preferred })
+      // Keep the sidebar count and queue state in sync across every surface.
+      await Promise.all([
+        mutateGlobal('phase5-playlists'),
+        mutateGlobal('phase5-playback-state'),
+      ])
     } catch (error) {
       onNotice(friendlyError(error), 'error')
     }
-  }, [available, onNotice])
+  }, [available, mutateGlobal, onNotice])
 
   useEffect(() => { void refresh() }, [refresh])
 
@@ -77,6 +88,7 @@ export default function PlaylistManager({
       onNotice(friendlyError(error), 'error')
     } finally {
       setBusy(false)
+      preferredRefreshRef.current = null
     }
   }, [onNotice, refresh])
 
@@ -91,6 +103,7 @@ export default function PlaylistManager({
   function openPlaylist(playlist: PlaylistSummary) {
     debugLog('playlists', 'button_click', { control: 'select_playlist', playlistId: playlist.id })
     void guard(async () => {
+      preferredRefreshRef.current = playlist.id
       setSelectedPlaylist(playlist.id)
       await selectPlaylist(playlist.id)
       onNotice(`Playlist “${playlist.name}” selected.`, 'info')
@@ -104,6 +117,7 @@ export default function PlaylistManager({
     }
     debugLog('playlists', 'button_click', { control: 'play_playlist', playlistId: playlist.id })
     void guard(async () => {
+      preferredRefreshRef.current = playlist.id
       setSelectedPlaylist(playlist.id)
       await playPlaylist(playlist.id)
       onNotice(`Playing “${playlist.name}” on the Cast device. Each video advances when the TV reports it finished — no durations needed.`, 'success')
@@ -127,6 +141,7 @@ export default function PlaylistManager({
         debugLog('playlists', 'button_click', { control: 'create_playlist', name })
         void guard(async () => {
           const id = await createPlaylist(name)
+          preferredRefreshRef.current = id
           setNewName('')
           await selectPlaylist(id)
           setSelectedPlaylist(id)
@@ -135,6 +150,27 @@ export default function PlaylistManager({
       }}>
         <input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="New playlist name" aria-label="New playlist name" maxLength={120} disabled={busy || !available} />
         <button type="submit" className="queue-primary" disabled={busy || !newName.trim() || !available}><Plus size={15} /> Create</button>
+        <button
+          type="button"
+          className="queue-primary playlist-create-with-selection"
+          disabled={busy || !newName.trim() || !selectedMediaIds.length || !available}
+          title="Create the playlist and add the currently selected videos"
+          onClick={() => {
+            const name = newName.trim()
+            if (!name || !selectedMediaIds.length) return
+            debugLog('playlists', 'button_click', { control: 'create_playlist_with_selection', name, count: selectedMediaIds.length })
+            void guard(async () => {
+              const id = await createPlaylist(name)
+              preferredRefreshRef.current = id
+              await addPlaylistItems(id, selectedMediaIds)
+              await selectPlaylist(id)
+              setNewName('')
+              setSelectedPlaylist(id)
+              onSelectionConsumed?.()
+              onNotice(`Playlist “${name}” created with ${selectedMediaIds.length} video${selectedMediaIds.length === 1 ? '' : 's'}.`, 'success')
+            })
+          }}
+        ><Plus size={15} /> Create + add selected ({selectedMediaIds.length})</button>
       </form>
 
       <div className="playlist-grid">
@@ -156,7 +192,10 @@ export default function PlaylistManager({
                 debugLog('playlists', 'button_click', { control: 'delete_playlist', playlistId: playlist.id })
                 void guard(async () => {
                   await deletePlaylist(playlist.id)
-                  if (selectedPlaylist === playlist.id) setSelectedPlaylist(null)
+                  if (selectedPlaylist === playlist.id) {
+                    preferredRefreshRef.current = null
+                    setSelectedPlaylist(null)
+                  }
                   onNotice(`Playlist “${playlist.name}” deleted. Your files were not changed.`, 'info')
                 })
               }} disabled={busy} title="Delete playlist" aria-label={`Delete ${playlist.name}`}><Trash2 size={14} /></button>

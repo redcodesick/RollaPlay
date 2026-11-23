@@ -1,20 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
-import useSWR from 'swr'
+import useSWR, { useSWRConfig } from 'swr'
 import { listen } from '@tauri-apps/api/event'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import {
-  AlertCircle, Cast, Check, Film, FolderPlus, HardDrive, LoaderCircle,
+  AlertCircle, Cast, Check, Film, FolderPlus, HardDrive, ListMusic, LoaderCircle,
   Play, RefreshCw, ShieldCheck, X,
 } from 'lucide-react'
 import {
-  getMediaFiles, getThumbnailSettings, isDesktopApp,
+  folderForPath, getMediaFiles, getThumbnailSettings, isDesktopApp,
   type CacheCleanupResult, type MediaFile, type ThumbnailProgress, type ThumbnailSettings,
 } from '../media'
 import { FolderList, useMediaFolders } from './LibraryFolders'
 import {
   castDeviceName, getCastPlaybackState, isCastAvailable, isCastSupportedExtension,
 } from '../cast'
-import { playMediaNow, queueAdd } from '../playlist'
+import { addPlaylistItems, createPlaylist, playMediaNow, queueAdd, selectPlaylist } from '../playlist'
 
 const extensions = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'webm', 'mpeg', 'mpg', 'm4v', '3gp']
 type SortBy = 'name' | 'date' | 'size'
@@ -29,11 +29,6 @@ function formatBytes(value: number) {
     unit += 1
   }
   return `${amount.toFixed(amount >= 100 ? 0 : 1)} ${units[unit]}`
-}
-
-function folderForPath(path: string) {
-  const separator = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
-  return separator > 0 ? path.slice(0, separator) : path
 }
 
 function MediaCard({
@@ -117,10 +112,14 @@ export default function MediaLibrary({
 }) {
   const [extension, setExtension] = useState('')
   const [sortBy, setSortBy] = useState<SortBy>('name')
+  const [folderFilter, setFolderFilter] = useState('')
+  const [playlistName, setPlaylistName] = useState('')
+  const [savingPlaylist, setSavingPlaylist] = useState(false)
   const [notice, setNotice] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
   const [castingMediaId, setCastingMediaId] = useState<number | null>(null)
   const isDesktop = isDesktopApp()
+  const { mutate: mutateGlobal } = useSWRConfig()
   const castReady = isCastAvailable()
   const folders = useMediaFolders()
   const search = searchQuery.trim()
@@ -128,6 +127,19 @@ export default function MediaLibrary({
   const { data: files = [], isLoading: isLoadingFiles, error: filesError, mutate: refreshFiles } = useSWR(fileKey, getMediaFiles)
   const { data: thumbnailSettings = { width: 320, height: 180, quality: 82 }, mutate: refreshThumbnailSettings } = useSWR('thumbnail-settings', getThumbnailSettings)
   const totalBytes = files.reduce((total, file) => total + file.size_bytes, 0)
+  const folderOptions = useMemo(
+    () => Array.from(new Set(files.map((file) => folderForPath(file.path)))).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+    [files],
+  )
+  const visibleFiles = useMemo(
+    () => folderFilter ? files.filter((file) => folderForPath(file.path) === folderFilter) : files,
+    [files, folderFilter],
+  )
+  const allVisibleSelected = visibleFiles.length > 0 && visibleFiles.every((file) => selectedMediaIds.includes(file.id))
+
+  useEffect(() => {
+    if (folderFilter && !folderOptions.includes(folderFilter)) setFolderFilter('')
+  }, [folderFilter, folderOptions])
 
   useEffect(() => {
     if (!isDesktop) return
@@ -202,6 +214,47 @@ export default function MediaLibrary({
         ? selectedMediaIds.filter((id) => id !== media.id)
         : [...selectedMediaIds, media.id],
     )
+  }
+
+  function selectAllVisible() {
+    if (!visibleFiles.length) return
+    if (allVisibleSelected) {
+      const visibleIds = new Set(visibleFiles.map((file) => file.id))
+      onSelectionChange(selectedMediaIds.filter((id) => !visibleIds.has(id)))
+      setNotice(`${visibleFiles.length} video${visibleFiles.length === 1 ? '' : 's'} removed from the selection.`)
+      return
+    }
+    const ids = Array.from(new Set([...selectedMediaIds, ...visibleFiles.map((file) => file.id)]))
+    onSelectionChange(ids)
+    setNotice(`${visibleFiles.length} video${visibleFiles.length === 1 ? '' : 's'} from ${folderFilter || 'all folders'} selected.`)
+  }
+
+  async function saveSelectionAsPlaylist() {
+    const name = playlistName.trim()
+    if (!name) {
+      setErrorMessage('Enter a playlist name first.')
+      return
+    }
+    if (!selectedMediaIds.length) {
+      setErrorMessage('Select at least one video first.')
+      return
+    }
+    setErrorMessage('')
+    setNotice('')
+    setSavingPlaylist(true)
+    try {
+      const id = await createPlaylist(name)
+      await addPlaylistItems(id, selectedMediaIds)
+      await selectPlaylist(id)
+      await Promise.all([mutateGlobal('phase5-playlists'), mutateGlobal('phase5-playback-state')])
+      setPlaylistName('')
+      setNotice(`Playlist “${name}” created with ${selectedMediaIds.length} video${selectedMediaIds.length === 1 ? '' : 's'}.`)
+      onSelectionChange([])
+    } catch (error) {
+      setErrorMessage(typeof error === 'string' ? error : error instanceof Error ? error.message : String(error))
+    } finally {
+      setSavingPlaylist(false)
+    }
   }
 
   async function addSelection(mode: 'append' | 'play_next' | 'play_now') {
@@ -283,11 +336,20 @@ export default function MediaLibrary({
       <section className="video-library-section" aria-labelledby="videos-title">
         <div className="video-library-heading"><div><h2 id="videos-title">All videos</h2><p>{search ? `Search results for “${search}”` : 'Your indexed video collection'}</p></div><div className="library-sort"><label htmlFor="extension-filter">Format</label><select id="extension-filter" value={extension} onChange={(event) => setExtension(event.target.value)}><option value="">All formats</option>{extensions.map((item) => <option key={item} value={item}>{item.toUpperCase()}</option>)}</select><label htmlFor="sort-order">Sort</label><select id="sort-order" value={sortBy} onChange={(event) => setSortBy(event.target.value as SortBy)}><option value="name">Name</option><option value="date">Date added</option><option value="size">File size</option></select></div></div>
         <div className="library-selection-bar" role="status">
-          <span>{selectedMediaIds.length ? `${selectedMediaIds.length} selected` : 'Select videos using the checkbox on each card'}</span>
+          <span>{selectedMediaIds.length ? `${selectedMediaIds.length} selected` : 'Select videos using the checkbox on each card, or select a whole folder'}</span>
+          <select className="selection-folder" value={folderFilter} onChange={(event) => setFolderFilter(event.target.value)} aria-label="Limit selection to one folder" disabled={!folderOptions.length}>
+            <option value="">All folders</option>
+            {folderOptions.map((folder) => <option key={folder} value={folder} title={folder}>{folder}</option>)}
+          </select>
+          <button onClick={selectAllVisible} disabled={!visibleFiles.length} title="Select every indexed video in the chosen folder">
+            <Check size={14} /> {allVisibleSelected ? 'Unselect all' : `Select all (${visibleFiles.length})`}
+          </button>
           <button onClick={() => void addSelection('play_now')} disabled={!selectedMediaIds.length || !castReady}><Play size={14} /> Play now</button>
           <button onClick={() => void addSelection('play_next')} disabled={!selectedMediaIds.length}>Play next</button>
           <button onClick={() => void addSelection('append')} disabled={!selectedMediaIds.length}>Add to queue</button>
-          <span className="selection-hint">Create or extend playlists from the Playlists panel.</span>
+          <input className="selection-playlist-name" value={playlistName} onChange={(event) => setPlaylistName(event.target.value)} placeholder="New playlist name" aria-label="New playlist name" maxLength={120} disabled={!isDesktop || savingPlaylist} />
+          <button onClick={() => void saveSelectionAsPlaylist()} disabled={!selectedMediaIds.length || !playlistName.trim() || !isDesktop || savingPlaylist} title="Create a playlist from the selected videos"><ListMusic size={14} /> Save playlist</button>
+          <span className="selection-hint">Playlists are stored locally; you can rename and play them in the Playlists panel.</span>
           {selectedMediaIds.length > 0 && <button className="selection-clear" onClick={() => onSelectionChange([])}><X size={14} /> Clear</button>}
         </div>
         {filesError ? <div className="library-empty-results"><AlertCircle size={20} /><strong>Could not load the library</strong><span>Try reopening the application. Your indexed files are stored on this device.</span></div> : isLoadingFiles ? <div className="library-loading"><LoaderCircle size={17} className="spin-icon" /> Loading videos…</div> : files.length ? <div className="media-grid">{files.map((media) => <MediaCard key={media.id} media={media} onRefresh={refreshThumbnail} onCast={castVideo} castReady={castReady} isCasting={castingMediaId === media.id} selected={selectedMediaIds.includes(media.id)} onToggleSelect={toggleSelect} />)}</div> : <div className="library-empty-results"><span className="empty-results-icon"><HardDrive size={22} /></span><strong>{search || extension ? 'No matching videos' : 'Your video collection is empty'}</strong><span>{search || extension ? 'Try a different search or format filter.' : 'Add a folder and scan it to see your videos here.'}</span>{!folders.directories.length && <button className="button-primary" onClick={() => void folders.addFolders()} disabled={!isDesktop}><FolderPlus size={16} /> Add media folder</button>}</div>}

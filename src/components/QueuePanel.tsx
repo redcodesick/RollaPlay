@@ -18,6 +18,7 @@ type Props = {
   castConnected: boolean
   selectedMediaIds: number[]
   onNotice: (message: string, level?: 'info' | 'success' | 'warning' | 'error') => void
+  onSelectionConsumed?: () => void
   onTogglePlay: () => void
   isPlaying: boolean
 }
@@ -45,7 +46,7 @@ function entryLabel(tone: string) {
 }
 
 export default function QueuePanel({
-  snapshot, castConnected, selectedMediaIds, onNotice, onTogglePlay, isPlaying,
+  snapshot, castConnected, selectedMediaIds, onNotice, onSelectionConsumed, onTogglePlay, isPlaying,
 }: Props) {
   const available = isPlaylistAvailable()
   const [busy, setBusy] = useState(false)
@@ -150,6 +151,7 @@ export default function QueuePanel({
         snapshot={snapshot}
         selectedMediaIds={selectedMediaIds}
         onNotice={onNotice}
+        onSelectionConsumed={onSelectionConsumed}
       />
 
       <section className="queue-section" aria-labelledby="history-title">

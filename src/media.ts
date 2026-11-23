@@ -60,6 +60,12 @@ export type CacheCleanupResult = {
 
 export const isDesktopApp = () => isTauri()
 
+/** Immediate parent folder of an indexed file, used for folder-scoped selection. */
+export function folderForPath(path: string) {
+  const separator = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return separator > 0 ? path.slice(0, separator) : path
+}
+
 export async function getLocalStatus(): Promise<{ database_ready: boolean }> {
   return invoke<{ database_ready: boolean }>('get_local_status')
 }
