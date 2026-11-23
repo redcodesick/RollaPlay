@@ -83,10 +83,18 @@
       }
       .message.error { border-color: rgba(229, 57, 53, .45); color: #ff9c98; background: rgba(229, 57, 53, .08); }
       .footnote { color: #777; font-size: 8px; letter-spacing: .7px; }
+      /* The desktop app sends a trusted OS click to this control. It stays
+       * invisible and is never shown as part of the sender UI. */
+      #cast-trigger {
+        position: fixed; left: 0; top: 0; width: 160px; height: 80px;
+        padding: 0; border: 0; background: transparent; opacity: 0;
+        pointer-events: auto; z-index: 10;
+      }
       [hidden] { display: none !important; }
     </style>
   </head>
   <body>
+    <button id="cast-trigger" type="button" aria-hidden="true" tabindex="-1"></button>
     <main class="card" aria-label="ROLLAPLAY Cast sender">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">RP</span>

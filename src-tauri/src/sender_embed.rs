@@ -11,23 +11,38 @@
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(windows)]
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, POINT, RECT};
+#[cfg(windows)]
+use windows::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 #[cfg(windows)]
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 #[cfg(windows)]
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEINPUT,
+};
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, EnumWindows, GetClassNameW, GetWindowLongPtrW, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindow, SetLayeredWindowAttributes, SetParent,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, LWA_ALPHA,
-    SW_HIDE, SW_RESTORE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW,
-    SW_SHOWNOACTIVATE, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_APPWINDOW,
-    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    EnumChildWindows, EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetParent,
+    GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
+    SetCursorPos, SetForegroundWindow, SetLayeredWindowAttributes, SetParent, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, HWND_TOP, LWA_ALPHA, SW_HIDE,
+    SW_RESTORE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
+    WS_CHILD, WS_CLIPCHILDREN,
+    WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    WS_OVERLAPPEDWINDOW, WS_POPUP,
 };
 
 static EMBEDDED_SENDER: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
+/// Original 1×1 geometry saved while the sender is temporarily enlarged for a
+/// trusted Cast picker click. Restored when the panel is hidden again.
+static SENDER_CLICK_RECT: OnceLock<Mutex<Option<(i32, i32, i32, i32)>>> = OnceLock::new();
 
 fn stored() -> &'static Mutex<Option<isize>> {
     EMBEDDED_SENDER.get_or_init(|| Mutex::new(None))
+}
+
+fn click_rect() -> &'static Mutex<Option<(i32, i32, i32, i32)>> {
+    SENDER_CLICK_RECT.get_or_init(|| Mutex::new(None))
 }
 
 /// CSS-pixel rectangle of the host element, relative to the WebView2 viewport.
@@ -262,6 +277,21 @@ pub fn hide_embedded() -> Result<(), String> {
         let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style);
         SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_ALPHA)
             .map_err(|error| format!("Could not conceal the Cast sender window ({error})."))?;
+        // Restore the 1×1 anchor after a picker click temporarily enlarged it.
+        if let Ok(mut saved) = click_rect().lock() {
+            if let Some((x, y, width, height)) = *saved {
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    x,
+                    y,
+                    width,
+                    height,
+                    SWP_NOACTIVATE | SWP_NOZORDER,
+                );
+                *saved = None;
+            }
+        }
     }
     Ok(())
 }
@@ -269,6 +299,137 @@ pub fn hide_embedded() -> Result<(), String> {
 #[cfg(not(windows))]
 pub fn hide_embedded() -> Result<(), String> {
     Ok(())
+}
+
+/// Supplies a real user gesture to the hidden sender so the official Cast SDK
+/// will open Chrome's receiver picker.
+///
+/// The Web Sender SDK refuses `requestSession()` unless it is called from a
+/// user gesture in the Chrome page. A bridge command from the app is not a
+/// gesture, so the page arms the selected receiver first and this function
+/// sends an OS-level click to an invisible button in the embedded page. The
+/// window is briefly made hit-testable (alpha 1, no `WS_EX_TRANSPARENT`) and
+/// widened to the left of its 1×1 anchor so the click lands on screen, then it
+/// is click-through again. `hide_embedded` restores the 1×1 anchor and full
+/// transparency when the device menu closes.
+#[cfg(windows)]
+pub fn click_cast_trigger() -> Result<(), String> {
+    let Some(handle) = stored_window() else {
+        return Err("The Cast sender is not embedded in this window yet.".to_string());
+    };
+    let hwnd = HWND(handle as *mut std::ffi::c_void);
+    if !unsafe { IsWindow(Some(hwnd)).as_bool() } {
+        if let Ok(mut guard) = stored().lock() {
+            *guard = None;
+        }
+        return Err("The Cast sender window is no longer available.".to_string());
+    }
+
+    unsafe {
+        let mut original_rect = RECT::default();
+        GetWindowRect(hwnd, &mut original_rect)
+            .map_err(|error| format!("Could not read the Cast sender position ({error})."))?;
+        let original_width = original_rect.right - original_rect.left;
+        let original_height = original_rect.bottom - original_rect.top;
+        let parent = GetParent(hwnd).unwrap_or_default();
+        // `GetWindowRect` is screen-relative but `SetWindowPos` on a child is
+        // parent-relative. Keep both forms so the trigger and the later 1×1
+        // restore stay correct on any monitor or DPI.
+        let mut original_parent_point = POINT { x: original_rect.left, y: original_rect.top };
+        if parent.0 as isize != 0 {
+            let _ = ScreenToClient(parent, &mut original_parent_point);
+        }
+        let mut original_cursor = POINT::default();
+        let _ = GetCursorPos(&mut original_cursor);
+        let _ = SetForegroundWindow(GetAncestor(hwnd, GA_ROOT));
+
+        let original_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let clickable_style =
+            (original_style & !(WS_EX_TRANSPARENT.0 as isize)) | WS_EX_LAYERED.0 as isize;
+        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, clickable_style);
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 1, LWA_ALPHA);
+
+        // Grow leftwards from the 1×1 anchor so the whole trigger stays on
+        // screen when the app is docked against the right edge. SWP_FRAMECHANGED
+        // applies the extended-style change; without it Windows keeps treating
+        // the layered child as click-through and Chrome never sees the click.
+        let mut click_parent = POINT {
+            x: original_rect.right.saturating_sub(240),
+            y: original_rect.top,
+        };
+        if parent.0 as isize != 0 {
+            let _ = ScreenToClient(parent, &mut click_parent);
+        }
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOP),
+            click_parent.x,
+            click_parent.y,
+            240,
+            160,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+
+        // Chrome still renders a ~30 px caption inside this child HWND, so the
+        // web page starts below it. Aim inside the hidden button, not the bar.
+        let mut target = POINT { x: 40, y: 72 };
+        let _ = ClientToScreen(hwnd, &mut target);
+        let _ = SetCursorPos(target.x, target.y);
+
+        let input_size = std::mem::size_of::<INPUT>() as i32;
+        let down = INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dwFlags: MOUSEEVENTF_LEFTDOWN,
+                    ..Default::default()
+                },
+            },
+        };
+        let up = INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dwFlags: MOUSEEVENTF_LEFTUP,
+                    ..Default::default()
+                },
+            },
+        };
+        let down_sent = SendInput(&[down], input_size);
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let up_sent = SendInput(&[up], input_size);
+        // Let Chrome dispatch the trusted click before making the sender
+        // click-through again. Keep the enlarged, nearly transparent window
+        // while the native picker is open; `hide_embedded` restores its 1×1
+        // geometry and full transparency when the device menu closes.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+
+        if let Ok(mut saved) = click_rect().lock() {
+            *saved = Some((original_parent_point.x, original_parent_point.y, original_width, original_height));
+        }
+        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, original_style);
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 1, LWA_ALPHA);
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            click_parent.x,
+            click_parent.y,
+            240,
+            160,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+        let _ = SetCursorPos(original_cursor.x, original_cursor.y);
+
+        if down_sent != 1 || up_sent != 1 {
+            return Err("Could not send the Cast picker click to the embedded sender.".to_string());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn click_cast_trigger() -> Result<(), String> {
+    Err("Sending the Cast picker click is only available on Windows.".to_string())
 }
 
 /// Unparents and hides the sender before the Chrome process is killed.

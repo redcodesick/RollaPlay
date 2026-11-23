@@ -107,6 +107,8 @@ export const embedCastSender = (rect: SenderHostRect) => invoke<boolean>('embed_
 export const showCastSender = (rect: SenderHostRect) => invoke<boolean>('show_cast_sender', { rect })
 export const moveCastSender = (rect: SenderHostRect) => invoke<void>('move_cast_sender', { rect })
 export const hideCastSender = () => invoke<void>('hide_cast_sender')
+/** Supplies the Chrome user gesture required by the official Cast picker. */
+export const clickCastSender = () => invoke<void>('click_cast_sender')
 export const stopCastSender = () => invoke<CastSenderStatus>('stop_cast_sender')
 export const getCastDiagnostics = () => invoke<CastDiagnostics>('get_cast_diagnostics')
 export const getCastPlaybackState = () => invoke<CastPlaybackSnapshot>('get_cast_playback_state')

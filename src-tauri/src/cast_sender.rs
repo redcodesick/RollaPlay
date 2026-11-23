@@ -1291,6 +1291,9 @@ mod tests {
         assert!(SENDER_JS.contains("setVolumeLevel"));
         assert!(SENDER_JS.contains("endCurrentSession"));
         assert!(SENDER_JS.contains("RemotePlayerController"));
+        assert!(SENDER_HTML.contains("id=\"cast-trigger\""));
+        assert!(SENDER_JS.contains("picker_armed"));
+        assert!(SENDER_JS.contains("context.requestSession()"));
     }
 
     #[test]

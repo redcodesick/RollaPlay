@@ -1799,6 +1799,15 @@ async fn hide_cast_sender(cast: State<'_, CastSenderManager>) -> Result<(), Stri
         .map_err(|error| format!("Could not hide the Cast sender ({error})."))?
 }
 
+/// Delivers a trusted click to the hidden Chrome sender after the page has
+/// armed the selected receiver, so the official SDK can open its picker.
+#[tauri::command]
+async fn click_cast_sender() -> Result<(), String> {
+    tokio::task::spawn_blocking(sender_embed::click_cast_trigger)
+        .await
+        .map_err(|error| format!("Could not open the Cast picker ({error})."))?
+}
+
 #[tauri::command]
 async fn stop_cast_sender(cast: State<'_, CastSenderManager>) -> Result<CastSenderStatus, String> {
     // Ask the receiver to end the session before the bridge and Chrome die.
@@ -2529,6 +2538,7 @@ pub fn run() {
             show_cast_sender,
             move_cast_sender,
             hide_cast_sender,
+            click_cast_sender,
             stop_cast_sender,
             get_cast_diagnostics,
             get_cast_playback_state,

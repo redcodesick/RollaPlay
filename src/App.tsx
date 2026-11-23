@@ -12,8 +12,8 @@ import MediaPicker from './components/MediaPicker'
 import PlaylistManager from './components/PlaylistManager'
 import { CastCheck, ChromeCheck, NetworkCheck } from './components/SetupChecks'
 import {
-  castDeviceName, castSendControl, embedCastSender, formatSeconds, getCastPlaybackState,
-  hideCastSender, isCastAvailable, launchCastSender,
+  castDeviceName, castSendControl, clickCastSender, embedCastSender, formatSeconds,
+  getCastPlaybackState, hideCastSender, isCastAvailable, launchCastSender, onCastPlaybackEvent,
   playerStateLabel, showCastSender, type SenderHostRect,
 } from './cast'
 import {
@@ -351,6 +351,26 @@ function App() {
     return () => { active = false; void unlisten.then((off) => off()) }
   }, [])
   const castReady = isCastAvailable()
+  // The hidden sender acknowledges when the desktop app has armed a receiver.
+  // A trusted OS click is then required because Chrome only opens its official
+  // Cast picker from a real user gesture in the sender page.
+  useEffect(() => {
+    if (!castReady) return
+    let active = true
+    const unlisten = onCastPlaybackEvent((event) => {
+      if (!active) return
+      if (event.kind === 'picker_clicked') {
+        debugLog('wizard', 'Cast picker click reached the hidden sender')
+        return
+      }
+      if (event.kind !== 'picker_armed') return
+      debugLog('wizard', 'Cast receiver armed; sending trusted picker click')
+      void clickCastSender()
+        .then(() => debugLog('wizard', 'Cast picker click delivered'))
+        .catch((error) => showNotice(String(error), 'error'))
+    })
+    return () => { active = false; void unlisten.then((off) => off()) }
+  }, [castReady, showNotice])
   const { data: castPlayback } = useSWR(castReady ? 'cast-playback-state' : null, getCastPlaybackState, { refreshInterval: 1500 })
   const castDevice = castDeviceName(castPlayback)
   const castTitle = castPlayback?.filename ?? null
@@ -482,7 +502,6 @@ function App() {
                 onClose={closeConnect}
                 onNotice={showNotice}
                 playback={castPlayback ?? null}
-                localPlaying={phase5Snapshot?.state === 'playing' && !castConnected}
               />
             </div>
           </div>

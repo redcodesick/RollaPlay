@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import useSWR from 'swr'
 import {
-  AlertCircle, Cast, Check, LoaderCircle, Monitor, RefreshCw, Tv, X,
+  AlertCircle, Cast, Check, LoaderCircle, RefreshCw, Tv, X,
 } from 'lucide-react'
 import {
   castDeviceName, castRequestSession, castSendControl, castStateLabel, discoverCastDevices,
@@ -15,7 +15,6 @@ type Props = {
   onClose: () => void
   onNotice: Notice
   playback: CastPlaybackSnapshot | null
-  localPlaying: boolean
 }
 
 type DeviceTone = 'playing' | 'connected' | 'connecting' | 'failed' | 'available'
@@ -31,7 +30,7 @@ function toneLabel(tone: DeviceTone) {
 }
 
 export default function ConnectPanel({
-  open, onClose, onNotice, playback, localPlaying,
+  open, onClose, onNotice, playback,
 }: Props) {
   const panelRef = useRef<HTMLElement | null>(null)
   const pendingRef = useRef<CastDevice | null>(null)
@@ -127,7 +126,7 @@ export default function ConnectPanel({
     try {
       await launchCastSender()
       await castRequestSession(device)
-      onNotice(`${device.name} selected. Choose it in the Cast dialog to finish connecting.`, 'info')
+      onNotice(`Opening Chrome’s Cast dialog for ${device.name}. Choose it to finish connecting.`, 'info')
     } catch (error) {
       const message = typeof error === 'string' ? error : error instanceof Error ? error.message : String(error)
       setFailed(message)
@@ -169,20 +168,20 @@ export default function ConnectPanel({
           <p>Choose where ROLLAPLAY should play. Devices below are found on your local network.</p>
         </div>
 
-        <div className={`connect-current ${localPlaying ? 'local' : ''} ${connectedDevice ? 'remote' : ''}`}>
-          <span className="connect-current-icon">
-            {connectedDevice ? <Tv size={19} /> : <Monitor size={19} />}
-          </span>
-          <div className="connect-current-copy">
-            <strong>{connectedDevice ?? 'This PC'}</strong>
-            <span>{connectedDevice ? `Google Cast · ${castStateLabel(playback?.cast_state)}` : 'Local playback · no receiver connected'}</span>
+        {connectedDevice && (
+          <div className="connect-current remote">
+            <span className="connect-current-icon"><Tv size={19} /></span>
+            <div className="connect-current-copy">
+              <strong>{connectedDevice}</strong>
+              <span>Google Cast · {castStateLabel(playback?.cast_state)}</span>
+            </div>
+            <span className={`connect-indicator ${receiverPlaying ? 'live' : ''}`}>
+              {receiverPlaying && <i />}
+              {receiverPlaying ? 'PLAYING HERE' : 'READY'}
+            </span>
+            <button className="connect-switch" onClick={() => void switchDevice()} title="Disconnect to choose another receiver">SWITCH</button>
           </div>
-          <span className={`connect-indicator ${receiverPlaying || (!connectedDevice && localPlaying) ? 'live' : ''}`}>
-            {(receiverPlaying || (!connectedDevice && localPlaying)) && <i />}
-            {receiverPlaying || (!connectedDevice && localPlaying) ? 'PLAYING HERE' : 'READY'}
-          </span>
-          {connectedDevice && <button className="connect-switch" onClick={() => void switchDevice()} title="Disconnect to choose another receiver">SWITCH</button>}
-        </div>
+        )}
 
         <div className="connect-list-head">
           <span>NEARBY DEVICES</span>
@@ -234,7 +233,7 @@ export default function ConnectPanel({
         {connecting && pending && (
           <div className="connect-picker-note" role="status">
             <LoaderCircle size={14} className="spin-icon" />
-            <span>Choose <b>{pending.name}</b> in Chrome’s Cast dialog. The Web SDK cannot preselect a receiver from the page.</span>
+            <span>Chrome’s Cast dialog is opening. Choose <b>{pending.name}</b> to finish connecting.</span>
             <button onClick={cancelConnection}>Cancel</button>
           </div>
         )}
