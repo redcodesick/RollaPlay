@@ -68,12 +68,18 @@
   let currentPlaybackToken = null;
   let currentCastSessionId = null;
   let currentMediaSessionId = null;
-  // The media session id of the load that produced currentPlaybackToken. A
-  // receiver assigns a new id to every load; a FINISHED state from the previous
-  // media object must never complete the next playlist entry.
+  // Best-known media session id for the current playback token. It is filled
+  // from real media status; guessing it in loadMedia().then() can capture the
+  // previous item's id and make the next item's FINISHED look stale forever.
   let activeLoadMediaSessionId = null;
+  // Id owned by the load before the current one. Receivers keep emitting status
+  // for it briefly after a new load; those events must not update the new token.
+  let previousMediaSessionId = null;
   let activeMediaSession = null;
-  let completionPosted = false;
+  // Media ids that already reported IdleReason.FINISHED. Kept across loads so
+  // a receiver's late status for the previous item cannot complete the next
+  // one, while a genuinely new media id always completes its own token.
+  const finishedMediaIds = new Set();
 
   const castStateLabels = {
     NO_DEVICES_AVAILABLE: 'No Cast devices found on this network yet',
@@ -235,6 +241,7 @@
     } else if (sessionState === 'SESSION_ENDED' || sessionState === 'SESSION_ENDING') {
       if (sessionState === 'SESSION_ENDED') {
         activeLoadMediaSessionId = null;
+        currentMediaSessionId = null;
         elements['device-name'].textContent = 'None';
         post({
           type: 'session_ended',
@@ -294,7 +301,11 @@
       currentCastSessionId = clampText(String(session.getSessionId()), 120) || null;
     }
     const media = session && typeof session.getMediaSession === 'function' ? session.getMediaSession() : null;
-    if (media && Number.isFinite(media.mediaSessionId)) currentMediaSessionId = media.mediaSessionId;
+    // A finished/stale media object must never replace the id of the item that
+    // is actually playing for the current token.
+    if (media && Number.isFinite(media.mediaSessionId) && !isStaleMedia(media)) {
+      currentMediaSessionId = media.mediaSessionId;
+    }
     return media || null;
   }
 
@@ -322,24 +333,24 @@
   }
 
   /* A receiver keeps the last media object (with idleReason=FINISHED) around
-   * briefly after a new load. Only report completion for the media session that
-   * belongs to the current playback token. */
-  function isActiveMedia(media) {
-    if (!media || activeLoadMediaSessionId === null) return false;
-    if (!Number.isFinite(media.mediaSessionId)) return true;
-    return media.mediaSessionId === activeLoadMediaSessionId;
+   * briefly after a new load. Track which ids already finished instead of
+   * trying to predict the new id: a late status from an old media id is ignored,
+   * while a genuinely new media id always completes its own playback token. */
+  function isStaleMedia(media) {
+    if (!media || !Number.isFinite(media.mediaSessionId)) return false;
+    return media.mediaSessionId === previousMediaSessionId || finishedMediaIds.has(media.mediaSessionId);
   }
 
   function postFinished(media) {
-    if (completionPosted || !isActiveMedia(media)) return;
-    const idleReason = idleReasonFrom(media);
-    if (!isFinishedReason(idleReason)) return;
-    completionPosted = true;
+    if (!media || !currentPlaybackToken || isStaleMedia(media)) return;
+    if (!isFinishedReason(idleReasonFrom(media))) return;
+    const mediaSessionId = Number.isFinite(media.mediaSessionId) ? media.mediaSessionId : null;
+    if (mediaSessionId !== null) finishedMediaIds.add(mediaSessionId);
     post({
       type: 'media_completed',
       playback_token: currentPlaybackToken,
       cast_session_id: currentCastSessionId,
-      media_session_id: Number.isFinite(media.mediaSessionId) ? media.mediaSessionId : currentMediaSessionId,
+      media_session_id: mediaSessionId,
       position_seconds: Number.isFinite(media.currentTime) ? media.currentTime :
         (player && Number.isFinite(player.currentTime) ? player.currentTime : 0),
       duration_seconds: Number.isFinite(media.duration) ? media.duration :
@@ -349,33 +360,34 @@
   }
 
   function checkFinished() {
-    if (completionPosted) return;
-    const media = correlation();
-    if (!media) return;
+    const attached = activeMediaSession;
+    const current = correlation();
+    if (!attached && !current) return;
+    // A newly loaded media can become visible on the session slightly after
+    // the load promise resolves. Check both the listener target and the
+    // session's current media so completion is never lost to that race.
     attachMediaSessionListener();
-    postFinished(media);
+    if (attached) postFinished(attached);
+    if (current && current !== attached) postFinished(current);
   }
 
   function currentIdleReason() {
     const media = correlation();
     const reason = idleReasonFrom(media);
     if (!reason) return null;
-    // Do not leak a stale FINISHED from the previous item into a new load.
-    return isFinishedReason(reason) && !isActiveMedia(media) ? null : reason;
+    // A stale FINISHED must not leak into the new load's media status.
+    return isFinishedReason(reason) && isStaleMedia(media) ? null : reason;
   }
 
   function onMediaStatusUpdated(event) {
     attachMediaSessionListener();
     const media = (event && event.data) || activeMediaSession || correlation();
     if (!media) return;
-    if (Number.isFinite(media.mediaSessionId)) currentMediaSessionId = media.mediaSessionId;
-    const idleReason = idleReasonFrom(media);
-    if (isFinishedReason(idleReason)) {
-      postFinished(media);
-    } else if (idleReason) {
-      // A new load resets the completion latch for the next item.
-      completionPosted = false;
+    if (Number.isFinite(media.mediaSessionId) && !isStaleMedia(media)) {
+      currentMediaSessionId = media.mediaSessionId;
+      activeLoadMediaSessionId = media.mediaSessionId;
     }
+    if (isFinishedReason(idleReasonFrom(media))) postFinished(media);
     postStatus(true);
   }
 
@@ -455,8 +467,12 @@
     pendingLoad = null;
     pendingDeviceRequested = false;
     currentPlaybackToken = clampText(command.playback_token, 80) || null;
-    completionPosted = false;
+    // finishedMediaIds is intentionally preserved: a late FINISHED from the
+    // previous item must never complete the new token. The previous id is
+    // remembered so its late status cannot overwrite the new load's ids either.
+    previousMediaSessionId = currentMediaSessionId;
     activeLoadMediaSessionId = null;
+    currentMediaSessionId = null;
     try {
       const mediaInfo = new chrome.cast.media.MediaInfo(command.url, clampText(command.mime_type, 80) || 'video/mp4');
       const metadata = new chrome.cast.media.MovieMediaMetadata();
@@ -467,7 +483,7 @@
       session.loadMedia(request)
         .then(() => {
           correlation();
-          activeLoadMediaSessionId = currentMediaSessionId;
+          if (Number.isFinite(currentMediaSessionId)) activeLoadMediaSessionId = currentMediaSessionId;
           attachMediaSessionListener();
           setStatus('Playing on ' + deviceName() + '. Control playback from ROLLAPLAY.', false);
           post({
