@@ -2,6 +2,15 @@ import { listen } from '@tauri-apps/api/event'
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import type { ConnectionTestResult } from './media-server'
 
+export type CastDevice = {
+  id: string
+  name: string
+  model: string
+  address: string
+  port: number
+  source: string
+}
+
 export type CastSenderStatus = {
   chrome_installed: boolean
   chrome_path: string | null
@@ -67,6 +76,7 @@ export type CastControlAction =
   | 'set_volume'
   | 'set_mute'
   | 'disconnect'
+  | 'request_session'
   | 'close_sender'
 
 export type CastControlOptions = {
@@ -74,6 +84,8 @@ export type CastControlOptions = {
   positionSeconds?: number
   volume?: number
   muted?: boolean
+  deviceId?: string
+  deviceName?: string
 }
 
 /** Containers the Cast Default Media Receiver accepts. */
@@ -86,6 +98,8 @@ export const isCastAvailable = () => isTauri()
 
 export type SenderHostRect = { x: number; y: number; width: number; height: number }
 
+/** Real LAN receivers found through `_googlecast._tcp.local.` mDNS. */
+export const discoverCastDevices = () => invoke<CastDevice[]>('discover_cast_devices')
 export const getCastSenderStatus = () => invoke<CastSenderStatus>('get_cast_sender_status')
 export const launchCastSender = () => invoke<CastSenderStatus>('launch_cast_sender')
 /** Embeds the managed Chrome sender window into the in-app sender panel. */
@@ -99,6 +113,9 @@ export const getCastPlaybackState = () => invoke<CastPlaybackSnapshot>('get_cast
 export const castLoadMedia = (mediaFileId: number) => invoke<CastLoadOutcome>('cast_load_media', { mediaFileId })
 export const castSendControl = (action: CastControlAction, options: CastControlOptions = {}) =>
   invoke<void>('cast_send_control', { action, ...options })
+/** Opens the official Web Sender device dialog for the selected receiver. */
+export const castRequestSession = (device: CastDevice) =>
+  castSendControl('request_session', { deviceId: device.id, deviceName: device.name })
 export const verifyCastMediaUrl = (mediaFileId: number) =>
   invoke<ConnectionTestResult>('verify_cast_media_url', { mediaFileId })
 

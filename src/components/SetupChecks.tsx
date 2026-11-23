@@ -40,7 +40,7 @@ export function ChromeCheck({ onNotice }: { onNotice: Notice }) {
     try {
       const status = await launchCastSender()
       await mutate(status, { revalidate: false })
-      onNotice(status.chrome_installed ? 'Cast sender started in the sender panel.' : 'Google Chrome was not found on this device.', status.chrome_installed ? 'success' : 'warning')
+      onNotice(status.chrome_installed ? 'Connect is open. Choose a receiver to start Casting.' : 'Google Chrome was not found on this device.', status.chrome_installed ? 'success' : 'warning')
     } catch (launchError) {
       diagnosticError('wizard', 'launch_cast_sender_failed', launchError)
       onNotice(friendlyError(launchError), 'error')
@@ -59,12 +59,12 @@ export function ChromeCheck({ onNotice }: { onNotice: Notice }) {
         <CheckRow label="Google Chrome" value={data.chrome_installed ? 'Detected' : 'Not found'} />
         <CheckRow label="Chrome path" value={data.chrome_path} />
         <CheckRow label="Sender bridge" value={data.bridge_state} />
-        <CheckRow label="Sender window" value={data.sender_window_state} />
+        <CheckRow label="Sender panel" value={data.sender_window_state} />
         {data.last_error && <div className="library-message error" role="alert"><AlertCircle size={16} />{data.last_error}</div>}
       </>}
       <div className="setup-check-actions">
         <button className="folder-action" onClick={() => { debugLog('wizard', 'button_click', { control: 'refresh_chrome_status' }); void mutate() }} disabled={isLoading || busy}><RefreshCw size={14} /> Refresh</button>
-        <button className="folder-action" onClick={() => void launch()} disabled={busy || !data?.chrome_installed}><Cast size={14} /> {busy ? 'Starting…' : 'Start sender window'}</button>
+        <button className="folder-action" onClick={() => void launch()} disabled={busy || !data?.chrome_installed}><Cast size={14} /> {busy ? 'Opening…' : 'Open Connect'}</button>
       </div>
     </div>
   )
@@ -152,7 +152,7 @@ export function CastCheck({ onNotice }: { onNotice: Notice }) {
       {(senderError || playbackError) && <div className="library-message error" role="alert"><AlertCircle size={16} />{friendlyError(senderError ?? playbackError)}</div>}
       {(senderLoading || playbackLoading) && <div className="library-loading"><LoaderCircle size={17} className="spin-icon" /> Reading Cast status…</div>}
       <CheckRow label="Chrome" value={sender?.chrome_installed ? 'Detected' : 'Not found'} />
-      <CheckRow label="Sender window" value={sender?.sender_window_state ?? null} />
+      <CheckRow label="Sender panel" value={sender?.sender_window_state ?? null} />
       <CheckRow label="Discovery" value={castStateLabel(playback?.cast_state ?? null)} />
       <CheckRow label="Session" value={sessionStateLabel(playback?.session_state ?? null)} />
       <CheckRow label="Connected device" value={connectedDevice} />

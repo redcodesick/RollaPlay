@@ -38,7 +38,7 @@ function discoveryHint(snapshot: CastPlaybackSnapshot, status: CastSenderStatus 
     return 'Chrome is not installed. Install Google Chrome on this PC, then launch the sender again.'
   }
   if (snapshot.cast_state === 'NO_DEVICES_AVAILABLE') {
-    return 'No Cast devices found. Make sure the Xiaomi Mi Box is on the same Wi-Fi network and powered up, then wait a moment.'
+    return 'No Cast devices found. Make sure your receiver is powered on and connected to the same LAN, then refresh.'
   }
   if (snapshot.last_error) return snapshot.last_error
   return undefined
@@ -176,7 +176,7 @@ export default function CastPanel() {
         <div>
           <div className="section-eyebrow"><span className="eyebrow-line" /> PHASE 4 · GOOGLE CAST</div>
           <h2 id="cast-panel-title">Cast connection</h2>
-          <p>Stream registered videos to a Cast receiver — for example a Xiaomi Mi Box — over your home network.</p>
+          <p>Stream registered videos to a Cast receiver on your home network. Use Connect to browse devices discovered on the LAN.</p>
         </div>
         <div className={`cast-status-pill ${stateClass}`} role="status"><i />{deviceLabel}</div>
       </div>
@@ -188,7 +188,7 @@ export default function CastPanel() {
 
       <div className="cast-info-grid">
         <article className="cast-info-card"><span><Globe size={15} /> GOOGLE CHROME</span><strong>{status?.chrome_installed ? 'Detected' : 'Not found'}</strong><small>{status?.chrome_installed ? status.chrome_path ?? 'Registered install location' : 'The official Cast sender SDK requires Chrome'}</small></article>
-        <article className="cast-info-card"><span><Cast size={15} /> SENDER WINDOW</span><strong>{senderWindowLabels[status?.sender_window_state ?? 'not_launched'] ?? 'Unknown'}</strong><small>Sender page {status?.sender_page_connected ? 'connected' : 'not connected'} · last seen {formatAgo(status?.sender_page_last_seen_ms_ago ?? null)}</small></article>
+        <article className="cast-info-card"><span><Cast size={15} /> SENDER PANEL</span><strong>{senderWindowLabels[status?.sender_window_state ?? 'not_launched'] ?? 'Unknown'}</strong><small>Sender page {status?.sender_page_connected ? 'connected' : 'not connected'} · last seen {formatAgo(status?.sender_page_last_seen_ms_ago ?? null)}</small></article>
         <article className="cast-info-card"><span><Cast size={15} /> DISCOVERY</span><strong>{castStateLabel(snapshot.cast_state)}</strong><small>Session: {sessionStateLabel(snapshot.session_state)}</small></article>
         <article className="cast-info-card"><span><Cast size={15} /> CONNECTED DEVICE</span><strong>{connectedDevice ?? 'None'}</strong><small>{status?.bridge_state === 'running' ? `Local sender bridge on 127.0.0.1:${status.bridge_port ?? ''}` : 'Local sender bridge stopped'}</small></article>
       </div>
@@ -201,7 +201,7 @@ export default function CastPanel() {
           </div>
           <div className="cast-controls-actions">
             <button className="button-primary" onClick={() => runAction(() => launchCastSender(), connectedDevice ? `Sender ready. Casting to ${connectedDevice}.` : 'Sender ready. Choose your TV in the sender panel.')} disabled={!isDesktop || isWorking}>
-              {isWorking ? <LoaderCircle size={15} className="spin-icon" /> : <Cast size={15} />} Launch sender
+              {isWorking ? <LoaderCircle size={15} className="spin-icon" /> : <Cast size={15} />} Open Connect
             </button>
             <button className="folder-action" onClick={() => runAction(() => stopCastSender(), 'The Cast sender was closed.')} disabled={!isDesktop || isWorking}>Close sender</button>
           </div>

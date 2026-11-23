@@ -843,6 +843,14 @@ impl CastSenderManager {
             .map(|_| ())
     }
 
+    /// Stops receiver playback and ends the Cast session before shutdown. Both
+    /// commands are best-effort; the caller still shuts the bridge down if the
+    /// sender page is already gone.
+    pub fn stop_playback(&self) -> Result<(), String> {
+        self.send_command(serde_json::json!({ "type": "control", "action": "stop" }))?;
+        self.send_command(serde_json::json!({ "type": "control", "action": "disconnect" }))
+    }
+
     /// Playback must never create a visible Chrome window by itself. If the
     /// user hid the sender and its page is not connected, report the problem
     /// instead of spawning a floating window over the app.
@@ -1362,7 +1370,6 @@ mod tests {
                 [],
             )
             .unwrap();
-        let media_file_id = connection.last_insert_rowid();
         (temporary, connection)
     }
 

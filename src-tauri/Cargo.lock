@@ -3087,6 +3087,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "rollaplay"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "axum",
+ "base64 0.22.1",
+ "cap-std",
+ "http-body-util",
+ "image",
+ "infer",
+ "netdev",
+ "rand",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tower",
+ "url",
+ "uuid",
+ "walkdir",
+ "windows",
+ "windows-dpapi",
+ "windows-registry",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4866,39 +4899,6 @@ name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
-
-[[package]]
-name = "windows-media-station"
-version = "0.1.0"
-dependencies = [
- "async-stream",
- "axum",
- "base64 0.22.1",
- "cap-std",
- "http-body-util",
- "image",
- "infer",
- "netdev",
- "rand",
- "rusqlite",
- "serde",
- "serde_json",
- "subtle",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tempfile",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tower",
- "url",
- "uuid",
- "walkdir",
- "windows",
- "windows-dpapi",
- "windows-registry",
-]
 
 [[package]]
 name = "windows-numerics"

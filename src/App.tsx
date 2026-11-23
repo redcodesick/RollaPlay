@@ -5,6 +5,7 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import MediaLibrary from './components/MediaLibrary'
 import MediaServerSettings from './components/MediaServerSettings'
 import CastPanel from './components/CastPanel'
+import ConnectPanel from './components/ConnectPanel'
 import QueuePanel from './components/QueuePanel'
 import { FolderList, useMediaFolders } from './components/LibraryFolders'
 import MediaPicker from './components/MediaPicker'
@@ -42,9 +43,9 @@ const navItems: { label: View; icon: typeof House }[] = [
 function Sidebar({ active, playlistCount, onNavigate, onSetup }: { active: View; playlistCount: number; onNavigate: (view: View) => void; onSetup: () => void }) {
   return (
     <aside className="sidebar">
-      <a className="brand" href="#home" aria-label="Windows Media Station home" onClick={(event) => { event.preventDefault(); onNavigate('Home') }}>
+      <a className="brand" href="#home" aria-label="RollaPlay home" onClick={(event) => { event.preventDefault(); onNavigate('Home') }}>
         <span className="brand-mark"><Aperture size={19} strokeWidth={2.4} /></span>
-        <span className="brand-name">WINDOWS MEDIA<span>STATION</span></span>
+        <span className="brand-name"><b>ROLLA</b>PLAY<span>ROCKNROLLA MEDIA STATION</span></span>
       </a>
       <div className="nav-label">YOUR SPACE</div>
       <nav className="primary-nav" aria-label="Main navigation">
@@ -63,7 +64,7 @@ function Sidebar({ active, playlistCount, onNavigate, onSetup }: { active: View;
         <ShieldCheck size={16} className="shield-icon" />
       </div>
       <button className="help-link" onClick={onSetup}><CircleHelp size={17} /> Setup guide</button>
-      <div className="profile-row"><div className="profile-avatar">M</div><div><strong>My media station</strong><span>Local device</span></div><MoreHorizontal size={18} /></div>
+      <div className="profile-row"><div className="profile-avatar">M</div><div><strong>RockNRolla Station</strong><span>Local device</span></div><MoreHorizontal size={18} /></div>
     </aside>
   )
 }
@@ -233,7 +234,7 @@ function SettingsView({ onManage }: { onManage: () => void }) {
     <section className="settings-view">
       <div className="section-eyebrow">PREFERENCES</div>
       <h1>Settings</h1>
-      <p className="settings-lede">Configure how Windows Media Station works on this device.</p>
+      <p className="settings-lede">Configure how RollaPlay works on this device.</p>
       <div className="settings-grid">
         <article className="settings-card">
           <div className="settings-card-icon"><FolderPlus size={19} /></div>
@@ -270,7 +271,7 @@ function App() {
   const [setupStep, setSetupStep] = useState(0)
   const [selectedMediaIds, setSelectedMediaIds] = useState<number[]>([])
   const [notice, setNotice] = useState<{ message: string; level: Phase5Notification['level'] } | null>(null)
-  const [senderPanelOpen, setSenderPanelOpen] = useState(false)
+  const [connectOpen, setConnectOpen] = useState(false)
   const [senderEmbedded, setSenderEmbedded] = useState(false)
   const [playingOverride, setPlayingOverride] = useState<boolean | null>(null)
   const [volumePreview, setVolumePreview] = useState<number | null>(null)
@@ -341,12 +342,12 @@ function App() {
     const timer = window.setTimeout(() => setNotice(null), 5000)
     return () => window.clearTimeout(timer)
   }, [notice])
-  // Wizard and Cast-panel buttons also launch the sender; route them all into
-  // the same in-app panel instead of a separate floating Chrome window.
+  // Wizard, top-bar and Cast-panel buttons all open the same in-app Connect
+  // overlay instead of a separate floating Chrome window.
   useEffect(() => {
     let active = true
     const unlisten = listen('cast-sender-launch-requested', () => {
-      if (active) setSenderPanelOpen(true)
+      if (active) setConnectOpen(true)
     })
     return () => { active = false; void unlisten.then((off) => off()) }
   }, [])
@@ -406,10 +407,10 @@ function App() {
     }
   }, [senderRect, showNotice])
 
-  const closeSenderPanel = useCallback(() => {
+  const closeConnect = useCallback(() => {
     // Hiding the child window leaves the Chrome process and Cast session alive.
     void hideCastSender().catch((error) => showNotice(String(error), 'error'))
-    setSenderPanelOpen(false)
+    setConnectOpen(false)
   }, [showNotice])
 
   // Spotify-style device picker: the sender panel is only needed while choosing
@@ -424,31 +425,31 @@ function App() {
         (event.kind === 'cast_state' && event.cast_state === 'CONNECTED' && !!event.device_name)
       // Wait until the Chrome window is actually embedded. Hiding it while it
       // is still a top-level window drops the bridge connection.
-      if (deviceChosen && senderEmbedded) closeSenderPanel()
+      if (deviceChosen && senderEmbedded) closeConnect()
     })
     return () => { active = false; void unlisten.then((off) => off()) }
-  }, [closeSenderPanel, senderEmbedded])
+  }, [closeConnect, senderEmbedded])
 
   const previousCastDeviceRef = useRef<string | null>(null)
   useEffect(() => {
     const previous = previousCastDeviceRef.current
     previousCastDeviceRef.current = castDevice
-    if (!castDevice || previous || !senderPanelOpen || !senderEmbedded) return
-    const timer = window.setTimeout(() => closeSenderPanel(), 700)
+    if (!castDevice || previous || !connectOpen || !senderEmbedded) return
+    const timer = window.setTimeout(() => closeConnect(), 700)
     return () => window.clearTimeout(timer)
-  }, [castDevice, senderPanelOpen, senderEmbedded, closeSenderPanel])
+  }, [castDevice, connectOpen, senderEmbedded, closeConnect])
 
   // A receiver may be selected while the sender window is still being embedded.
   // As soon as embedding succeeds, close the picker panel without killing the
   // Cast session.
   useEffect(() => {
-    if (!senderEmbedded || !senderPanelOpen || !castDevice) return
-    const timer = window.setTimeout(() => closeSenderPanel(), 300)
+    if (!senderEmbedded || !connectOpen || !castDevice) return
+    const timer = window.setTimeout(() => closeConnect(), 300)
     return () => window.clearTimeout(timer)
-  }, [senderEmbedded, senderPanelOpen, castDevice, closeSenderPanel])
+  }, [senderEmbedded, connectOpen, castDevice, closeConnect])
 
   useEffect(() => {
-    if (!senderPanelOpen) return
+    if (!connectOpen) return
     let disposed = false
     const frame = requestAnimationFrame(() => { if (!disposed) void attachSenderWindow() })
     const reposition = () => {
@@ -463,20 +464,22 @@ function App() {
       observer.disconnect()
       window.removeEventListener('resize', reposition)
     }
-  }, [senderPanelOpen, attachSenderWindow, senderRect])
+  }, [connectOpen, attachSenderWindow, senderRect])
 
   // Cast device selection stays in the managed Chrome sender (the official
   // SDK requires it). The player bar opens that sender inside this window as
   // a panel instead of leaving a second floating window open.
-  const openCastSender = useCallback(async () => {
-    debugLog('wizard', 'button_click', { control: 'open_cast_sender', connected: !!castDevice })
+  const openConnect = useCallback(async () => {
+    debugLog('wizard', 'button_click', { control: 'open_connect', connected: !!castDevice })
     try {
+      // Render the host first so the Chrome window is embedded as soon as it
+      // appears instead of flashing as a separate top-level window.
+      setConnectOpen(true)
       await launchCastSender()
-      setSenderPanelOpen(true)
       showNotice(
         castDevice
-          ? `Cast sender ready. Casting to ${castDevice}; no need to choose a device again.`
-          : 'Cast sender is now inside this window. Choose your TV there; hiding the panel keeps the session connected.',
+          ? `Connected to ${castDevice}. Choose another receiver any time from Connect.`
+          : 'Connect is ready. Pick a discovered receiver to open the Cast dialog.',
         castDevice ? 'success' : 'info',
       )
     } catch (error) {
@@ -503,12 +506,12 @@ function App() {
     <div className="app-shell">
       <Sidebar active={active} playlistCount={playlists?.length ?? 0} onNavigate={setActive} onSetup={openSetup} />
       <main className="main-area">
-        <header className="topbar"><div className="breadcrumb"><span>MY MEDIA</span><span className="crumb-slash">/</span><strong>{active.toUpperCase()}</strong></div><div className="topbar-actions"><label className="search-box"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search your library" aria-label="Search your library" /><kbd>⌘ K</kbd></label><button className="icon-button" aria-label="Sort library"><SlidersHorizontal size={19} /></button><button className={`device-pill ${castConnected ? 'connected' : ''}`} onClick={() => void openCastSender()} aria-label={`Cast status: ${castDevice ?? 'no device connected'}. Open the Cast sender.`}><span className="status-dot" /><Cast size={17} /><span>{castDevice ?? 'No device'}</span><ChevronDown size={14} /></button></div></header>
-        {active === 'Settings' ? <SettingsView onManage={browse} /> : active === 'Library' ? <MediaLibrary searchQuery={query} selectedMediaIds={selectedMediaIds} onSelectionChange={setSelectedMediaIds} /> : active === 'Playlists' ? <section className="section-page queue-page"><div className="section-eyebrow">YOUR COLLECTION</div><h1>Playlists &amp; queue</h1><p>Saved playlists, the active playback queue and receiver-driven playback controls.</p><QueuePanel snapshot={phase5Snapshot ?? null} castConnected={castConnected} selectedMediaIds={selectedMediaIds} onNotice={showNotice} onSelectionConsumed={() => setSelectedMediaIds([])} onTogglePlay={toggleCastPlay} isPlaying={castState === 'PLAYING'} /></section> : active === 'History' || active === 'Recently added' ? <section className="section-page"><div className="section-eyebrow">YOUR COLLECTION</div><h1>{pageTitle}</h1><p>{active === 'History' ? 'Your playback history appears in the Playlists & queue panel.' : 'New additions to your library will appear here.'}</p><EmptyLibrary onSetup={openSetup} onBrowse={browse} /></section> : <>
+        <header className="topbar"><div className="breadcrumb"><span>MY MEDIA</span><span className="crumb-slash">/</span><strong>{active.toUpperCase()}</strong></div><div className="topbar-actions"><label className="search-box"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search your library" aria-label="Search your library" /><kbd>⌘ K</kbd></label><button className="icon-button" aria-label="Sort library"><SlidersHorizontal size={19} /></button><button className={`device-pill ${castConnected ? 'connected' : ''}`} onClick={() => void openConnect()} aria-label={`Cast status: ${castDevice ?? 'no device connected'}. Open Connect.`}><span className="status-dot" /><Cast size={17} /><span>{castDevice ?? 'No device'}</span><ChevronDown size={14} /></button></div></header>
+        {active === 'Settings' ? <SettingsView onManage={browse} /> : active === 'Library' ? <MediaLibrary searchQuery={query} selectedMediaIds={selectedMediaIds} onSelectionChange={setSelectedMediaIds} /> : active === 'Playlists' ? <section className="section-page queue-page"><div className="section-eyebrow">YOUR COLLECTION</div><h1>Playlists &amp; queue</h1><p>Saved playlists, the active playback queue and receiver-driven playback controls.</p><QueuePanel snapshot={phase5Snapshot ?? null} castConnected={castConnected} selectedMediaIds={selectedMediaIds} onNotice={showNotice} onSelectionConsumed={() => setSelectedMediaIds([])} onTogglePlay={toggleCastPlay} isPlaying={castState === 'PLAYING'} onHistoryCleared={() => void mutatePhase5()} /></section> : active === 'History' || active === 'Recently added' ? <section className="section-page"><div className="section-eyebrow">YOUR COLLECTION</div><h1>{pageTitle}</h1><p>{active === 'History' ? 'Your playback history appears in the Playlists & queue panel.' : 'New additions to your library will appear here.'}</p><EmptyLibrary onSetup={openSetup} onBrowse={browse} /></section> : <>
           <section className="welcome-row"><div><div className="section-eyebrow"><span className="eyebrow-line" /> YOUR PERSONAL MEDIA SPACE</div><h1>Good evening<span className="title-period">.</span></h1><p>Your movies, your space. All stored locally.</p></div><button className="quick-add" onClick={browse}><Plus size={17} /> Add media</button></section>
           <section className="featured-card"><img src="/media/featured-still.png" alt="Cinematic scene of a figure in a rain-lit city at night" /><div className="feature-overlay" /><div className="feature-content"><div className="feature-tag"><span /> MADE FOR YOUR LIVING ROOM</div><h2>Your library.<br /><em>Your rules.</em></h2><p>Bring your local video collection together and stream directly to your TV. No subscriptions. No uploads. Just your media.</p><button className="feature-button" onClick={browse}><FolderPlus size={17} /> Add your first folder <span>→</span></button></div><div className="feature-side-note"><span>01</span><i /> PRIVATE BY DESIGN</div><div className="feature-pagination"><span className="selected" /><span /><span /></div></section>
           <div className="content-heading"><div><div className="section-eyebrow">START HERE</div><h2>Make it yours</h2></div><button className="text-link" onClick={openSetup}>Setup guide <span>→</span></button></div>
-          <div className="quick-cards"><button className="quick-card" onClick={browse}><span className="quick-card-icon purple"><FolderPlus size={19} /></span><span className="quick-card-copy"><strong>Add your folders</strong><small>Build your local library</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={() => void openCastSender()}><span className="quick-card-icon blue"><Cast size={19} /></span><span className="quick-card-copy"><strong>Connect your TV</strong><small>{castDevice ? `Casting to ${castDevice}` : 'Open the Cast sender'}</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={openNetworkSetup}><span className="quick-card-icon amber"><HardDrive size={19} /></span><span className="quick-card-copy"><strong>Check your setup</strong><small>Network and preferences</small></span><span className="card-arrow">↗</span></button></div>
+          <div className="quick-cards"><button className="quick-card" onClick={browse}><span className="quick-card-icon purple"><FolderPlus size={19} /></span><span className="quick-card-copy"><strong>Add your folders</strong><small>Build your local library</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={() => void openConnect()}><span className="quick-card-icon blue"><Cast size={19} /></span><span className="quick-card-copy"><strong>Connect your TV</strong><small>{castDevice ? `Casting to ${castDevice}` : 'Choose a device'}</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={openNetworkSetup}><span className="quick-card-icon amber"><HardDrive size={19} /></span><span className="quick-card-copy"><strong>Check your setup</strong><small>Network and preferences</small></span><span className="card-arrow">↗</span></button></div>
           <div className="library-summary"><div className="summary-title"><div><div className="section-eyebrow">YOUR COLLECTION</div><h2>Recently added</h2></div><button className="text-link" onClick={() => setActive('Library')}>View library <span>→</span></button></div>
              {recentFiles && recentFiles.length > 0 ? <div className="recent-grid">
                {recentFiles.slice(0, 6).map((media) => <button
@@ -526,14 +529,17 @@ function App() {
              </div> : <EmptyLibrary onSetup={openSetup} onBrowse={browse} />}
            </div>
         </>}
-        <footer className="app-footer"><span>WINDOWS MEDIA STATION <b>•</b> PHASE 5 PLAYBACK QUEUE</span><span><ShieldCheck size={13} /> LOCAL FIRST</span></footer>
+        <footer className="app-footer"><span>ROLLAPLAY <b>•</b> LOCAL MEDIA. LOUD ATTITUDE.</span><span><ShieldCheck size={13} /> LOCAL FIRST</span></footer>
       </main>
       {notice && <div className={`phase5-toast toast-${notice.level}`} role="status"><Check size={15} /><span>{notice.message}</span><button onClick={() => setNotice(null)} aria-label="Dismiss notification"><X size={14} /></button></div>}
-      {senderPanelOpen && <section className="sender-dock" aria-label="Cast sender panel">
-        <div className="sender-dock-head"><span><Cast size={14} /> CAST SENDER</span><button onClick={closeSenderPanel} aria-label="Hide Cast sender"><X size={14} /></button></div>
-        <div ref={senderHostRef} className="sender-host" />
-        <p className="sender-dock-note">Choose a receiver here. Hiding this panel keeps the Cast session connected.</p>
-      </section>}
+      <ConnectPanel
+        open={connectOpen}
+        onClose={closeConnect}
+        onNotice={showNotice}
+        playback={castPlayback ?? null}
+        localPlaying={phase5Snapshot?.state === 'playing' && !castConnected}
+        senderHostRef={senderHostRef}
+      />
       <div className="player-bar"><div className="player-track"><div className={`player-art ${castConnected && castHasMedia ? 'casting' : ''}`}><Cast size={17} /></div><div className="player-meta"><strong>{castTitle ?? 'Nothing is playing'}</strong><span>{castConnected && castHasMedia ? `${playerStateLabel(castState)} on ${castDevice}` : 'Pick a video and cast it to your TV'}</span></div></div><div className="player-controls"><button disabled={!playlistReady || !phase5Snapshot?.current_entry_id} onClick={queuePrevious} aria-label="Previous video" title={phase5Snapshot ? `Previous · restarts after ${phase5Snapshot.previous_restart_threshold_seconds}s; with Shuffle follows history` : 'Previous'}><SkipBack size={17} /></button><button className="player-play" disabled={!castReady || !castConnected || !castHasMedia} onClick={toggleCastPlay} aria-label={isPlaying ? 'Pause' : 'Play'}>{isPlaying ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}</button><button disabled={!playlistReady || !phase5Snapshot?.current_entry_id} onClick={queueNext} aria-label="Next video" title="Next video"><SkipForward size={17} /></button></div><div className="player-progress"><span>{formatSeconds(castPosition)}</span><div className="progress-track"><i style={{ width: `${progressPercent}%` }} /></div><span>{formatSeconds(castDuration)}</span></div><div className="player-device"><Cast size={17} className={castConnected ? 'casting' : ''} /><span>{castDevice ?? 'No Cast device'}</span><div className="player-volume"><button
   aria-label={castPlayback?.muted ? 'Unmute' : 'Mute'}
   disabled={!castReady || !castConnected}

@@ -1,4 +1,4 @@
-/* Windows Media Station — managed Cast sender page.
+/* ROLLAPLAY — embedded Cast sender page.
  *
  * Runs in a Chrome application-mode window served from http://127.0.0.1, a
  * secure context accepted by the official Google Cast Web Sender SDK.
@@ -6,6 +6,9 @@
  * status comes exclusively from cast.framework RemotePlayer events — the
  * page never simulates progress with timers, never renders the streaming
  * URL (which embeds a short-lived credential), and never persists anything.
+ *
+ * The page intentionally has no playback or window controls. The app owns the
+ * player UI and the Connect panel; this page only hosts the official SDK.
  */
 (() => {
   'use strict';
@@ -24,7 +27,6 @@
     domReady = true;
     gatherElements();
     startEventSource();
-    bindLocalControls();
     post({ type: 'sender_ready' });
     if (frameworkAvailability === null) setFrameworkStatus('Waiting for the Cast framework');
     tryInitFramework();
@@ -33,22 +35,17 @@
   const elements = {};
   const elementIds = [
     'headline', 'cast-dot', 'cast-state-text', 'session-dot', 'session-state-text',
-    'pick-device', 'device-name', 'framework-state', 'now-playing', 'media-title',
-    'seek', 'time-current', 'time-total', 'play-pause', 'stop', 'mute', 'disconnect',
-    'volume', 'status-message',
+    'device-name', 'framework-state', 'status-message',
   ];
 
   function gatherElements() {
-    elementIds.forEach((id) => {
-      elements[id] = document.getElementById(id);
-    });
+    elementIds.forEach((id) => { elements[id] = document.getElementById(id); });
   }
 
   let frameworkReady = false;
   let context = null;
   let player = null;
   let controller = null;
-  let seeking = false;
   let lastStatusPost = 0;
   let currentTitle = null;
   let pendingLoad = null;
@@ -114,15 +111,6 @@
     if (elements[id]) elements[id].className = 'dot' + (tone ? ' ' + tone : '');
   }
 
-  function formatTime(seconds) {
-    const value = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
-    const hours = Math.floor(value / 3600);
-    const minutes = Math.floor((value % 3600) / 60);
-    const rest = value % 60;
-    const pad = (n) => String(n).padStart(2, '0');
-    return hours > 0 ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${minutes}:${pad(rest)}`;
-  }
-
   /* Returns the friendly receiver name only when a real session exists. */
   function activeDeviceName() {
     try {
@@ -146,7 +134,7 @@
       setFrameworkStatus('Cast framework unavailable');
       setDot('cast-dot', 'bad');
       if (elements['cast-state-text']) elements['cast-state-text'].textContent = 'The Google Cast framework failed to load';
-      setStatus('The Google Cast framework could not load in this window. Check the internet connection of this PC, then relaunch the sender from the desktop app.', true);
+      setStatus('The Google Cast framework could not load in this window. Check this PC’s internet connection, then reopen the Connect panel.', true);
       post({ type: 'sender_error', message: 'The Google Cast framework could not load.' });
       return;
     }
@@ -187,7 +175,6 @@
     }
     onCastStateChanged();
     onSessionStateChanged({ sessionState: context.getSessionState() });
-    renderMedia();
     postStatus(true);
   }
 
@@ -196,10 +183,9 @@
     const state = context.getCastState();
     const label = castStateLabels[state] || state || 'Unknown';
     elements['cast-state-text'].textContent = label;
-    elements['pick-device'].disabled = !frameworkReady || state === 'NO_DEVICES_AVAILABLE';
     setDot('cast-dot', state === 'CONNECTED' ? 'ok' : state === 'NO_DEVICES_AVAILABLE' ? 'bad' : state === 'CONNECTING' ? 'warn' : '');
     const connectedDevice = activeDeviceName();
-    elements['headline'].textContent = connectedDevice ? 'Casting to ' + connectedDevice : 'Choose a Cast device';
+    elements['headline'].textContent = connectedDevice ? 'Casting to ' + connectedDevice : 'Waiting for device selection';
     post({ type: 'cast_state', state: clampText(state, 40), device_name: activeDeviceName() });
   }
 
@@ -211,32 +197,18 @@
     elements['session-state-text'].textContent = label;
     const active = sessionState === 'SESSION_STARTED' || sessionState === 'SESSION_RESUMED';
     setDot('session-dot', active ? 'ok' : sessionState === 'SESSION_STARTING' || sessionState === 'SESSION_ENDING' ? 'warn' : '');
-    if (sessionState === 'SESSION_STARTED') {
+    if (sessionState === 'SESSION_STARTED' || sessionState === 'SESSION_RESUMED') {
       elements['device-name'].textContent = deviceName();
       pendingDeviceRequested = false;
       correlation();
       attachMediaSessionListener();
       post({
-        type: 'session_started',
+        type: sessionState === 'SESSION_STARTED' ? 'session_started' : 'session_resumed',
         device_name: clampText(deviceName(), 120),
         session_state: clampText(sessionState, 40),
         cast_session_id: currentCastSessionId,
       });
-      if (pendingLoad) {
-        const command = pendingLoad;
-        pendingLoad = null;
-        loadMedia(command);
-      }
-    } else if (sessionState === 'SESSION_RESUMED') {
-      elements['device-name'].textContent = deviceName();
-      correlation();
-      attachMediaSessionListener();
-      post({
-        type: 'session_resumed',
-        device_name: clampText(deviceName(), 120),
-        session_state: clampText(sessionState, 40),
-        cast_session_id: currentCastSessionId,
-      });
+      setStatus('Connected to ' + deviceName() + '. Playback is controlled from ROLLAPLAY.', false);
       if (pendingLoad) {
         const command = pendingLoad;
         pendingLoad = null;
@@ -244,14 +216,13 @@
       }
     } else if (sessionState === 'SESSION_START_FAILED') {
       elements['device-name'].textContent = 'None';
-      elements['now-playing'].hidden = true;
-      setStatus('The Cast session did not start (' + String(errorCode || 'unknown error') + ').', true);
-      post({ type: 'session_start_failed', session_state: clampText(sessionState, 40), error_code: clampText(errorCode, 80), message: clampText('The Cast session did not start (' + String(errorCode || 'unknown error') + ').', 380) });
+      const message = 'The Cast session did not start (' + String(errorCode || 'unknown error') + ').';
+      setStatus(message, true);
+      post({ type: 'session_start_failed', session_state: clampText(sessionState, 40), error_code: clampText(errorCode, 80), message: clampText(message, 380) });
     } else if (sessionState === 'SESSION_ENDED' || sessionState === 'SESSION_ENDING') {
       if (sessionState === 'SESSION_ENDED') {
         activeLoadMediaSessionId = null;
         elements['device-name'].textContent = 'None';
-        elements['now-playing'].hidden = true;
         post({
           type: 'session_ended',
           session_state: clampText(sessionState, 40),
@@ -296,30 +267,7 @@
     });
   }
 
-  function renderMedia() {
-    if (!elements['now-playing']) return;
-    if (!player || !player.isConnected) {
-      elements['now-playing'].hidden = true;
-      return;
-    }
-    elements['now-playing'].hidden = false;
-    const title = (typeof player.title === 'string' && player.title) || currentTitle || 'Video';
-    elements['media-title'].textContent = title;
-    const duration = Number.isFinite(player.duration) && player.duration > 0 ? player.duration : 0;
-    const position = Number.isFinite(player.currentTime) ? player.currentTime : 0;
-    if (!seeking) {
-      elements.seek.max = String(Math.max(1, Math.round(duration * 1000)));
-      elements.seek.value = String(Math.max(0, Math.round(position * 1000)));
-    }
-    elements['time-current'].textContent = formatTime(position);
-    elements['time-total'].textContent = duration ? formatTime(duration) : '--:--';
-    if (Number.isFinite(player.volumeLevel)) elements.volume.value = String(player.volumeLevel);
-    elements.mute.textContent = player.isMuted ? 'Unmute' : 'Mute';
-    elements['play-pause'].textContent = player.playerState === 'PLAYING' ? 'Pause' : 'Play';
-  }
-
   function onRemotePlayerEvent() {
-    renderMedia();
     attachMediaSessionListener();
     postStatus(false);
     checkFinished();
@@ -415,7 +363,6 @@
       // A new load resets the completion latch for the next item.
       completionPosted = false;
     }
-    renderMedia();
     postStatus(true);
   }
 
@@ -434,6 +381,44 @@
     }
   }
 
+  /* The Web Sender SDK has no supported API for selecting a receiver by id.
+   * requestSession() is the only public path, so the selected device is shown
+   * as guidance while Chrome's own picker makes the real connection. */
+  function openDeviceDialog(deviceName) {
+    if (!context || !frameworkReady) {
+      setStatus('The Cast sender is still starting. Try again in a moment.', true);
+      return;
+    }
+    if (activeDeviceName()) {
+      setStatus('Already casting to ' + activeDeviceName() + '. Choose another receiver from the Connect panel first.', false);
+      return;
+    }
+    pendingDeviceRequested = true;
+    setStatus(
+      deviceName
+        ? 'Choose “' + clampText(deviceName, 80) + '” in the Cast dialog to connect.'
+        : 'Choose a receiver in the Cast dialog to connect.',
+      false,
+    );
+    try {
+      const request = context.requestSession();
+      if (request && typeof request.catch === 'function') {
+        request.catch((error) => {
+          const code = error && error.code;
+          if (code === 'cancel') return;
+          if (context.getCurrentSession()) return;
+          const message = 'Could not open the Cast device dialog (' + String(code || error) + ').';
+          setStatus(message, true);
+          post({ type: 'session_start_failed', error_code: clampText(code, 60), message: clampText(message, 380) });
+        });
+      }
+    } catch (error) {
+      const message = 'Could not open the Cast device dialog (' + String(error) + ').';
+      setStatus(message, true);
+      post({ type: 'session_start_failed', message: clampText(message, 380) });
+    }
+  }
+
   function loadMedia(command) {
     if (typeof command.url !== 'string' || !RECEIVER_URL_PATTERN.test(command.url)) {
       post({ type: 'sender_error', message: 'The desktop app supplied a URL this receiver cannot fetch.' });
@@ -447,11 +432,7 @@
     }
     const session = context.getCurrentSession();
     if (!session) {
-      if (!pendingDeviceRequested) {
-        pendingDeviceRequested = true;
-        setStatus('Choose a Cast device in the Chrome window to start playback.', false);
-        try { context.requestSession().catch(() => {}); } catch (_) {}
-      }
+      if (!pendingDeviceRequested) openDeviceDialog(null);
       return;
     }
     pendingLoad = null;
@@ -468,12 +449,10 @@
       request.currentTime = Number.isFinite(command.position_seconds) && command.position_seconds > 0 ? command.position_seconds : 0;
       session.loadMedia(request)
         .then(() => {
-          elements['media-title'].textContent = currentTitle;
-          elements['now-playing'].hidden = false;
-          setStatus('Playing on ' + deviceName() + '. Control playback from Windows Media Station.', false);
           correlation();
           activeLoadMediaSessionId = currentMediaSessionId;
           attachMediaSessionListener();
+          setStatus('Playing on ' + deviceName() + '. Control playback from ROLLAPLAY.', false);
           post({
             type: 'media_loaded',
             playback_token: currentPlaybackToken,
@@ -505,6 +484,10 @@
     const action = command && command.action;
     if (action === 'close_sender') {
       window.close();
+      return;
+    }
+    if (action === 'request_session') {
+      openDeviceDialog(command.device_name);
       return;
     }
     if (action === 'disconnect') {
@@ -552,19 +535,14 @@
     } catch (error) {
       post({ type: 'sender_error', message: clampText('Control "' + action + '" failed: ' + String(error), 380) });
     }
-    setTimeout(() => {
-      renderMedia();
-      postStatus(true);
-    }, 150);
+    setTimeout(() => postStatus(true), 150);
   }
 
   function handleCommand(command) {
     if (!command || typeof command !== 'object') return;
     switch (command.type) {
       case 'hello':
-        if (command.playback && command.playback.filename && !currentTitle) {
-          elements['media-title'].textContent = String(command.playback.filename).slice(0, 160);
-        }
+        if (command.playback && command.playback.filename) currentTitle = clampText(command.playback.filename, 160) || 'Video';
         break;
       case 'load_media':
         loadMedia(command);
@@ -592,43 +570,5 @@
       /* EventSource reconnects automatically; the bridge tracks connection counts */
     };
     return source;
-  }
-
-  function bindLocalControls() {
-    elements['pick-device'].addEventListener('click', () => {
-      if (!context) return;
-      const existingDevice = activeDeviceName();
-      if (existingDevice) {
-        setStatus('Already casting to ' + existingDevice + '. You do not need to choose a device again.', false);
-        return;
-      }
-      context.requestSession().catch((error) => {
-        const code = error && error.code;
-        if (code === 'cancel') return;
-        // Some Chrome/Cast SDK combinations reject requestSession() with
-        // invalid_parameter after auto-joining an available receiver. A live
-        // session means the picker achieved the user's intent, so do not
-        // present a false failure.
-        if (context.getCurrentSession()) return;
-        setStatus('Could not open the device picker (' + String(code || error) + ').', true);
-      });
-    });
-    elements['play-pause'].addEventListener('click', () => applyControl({ type: 'control', action: 'toggle_play' }));
-    elements.stop.addEventListener('click', () => applyControl({ type: 'control', action: 'stop' }));
-    elements.mute.addEventListener('click', () => applyControl({ type: 'control', action: 'set_mute', muted: !(player && player.isMuted) }));
-    elements.disconnect.addEventListener('click', () => applyControl({ type: 'control', action: 'disconnect' }));
-    elements.seek.addEventListener('input', () => {
-      seeking = true;
-      const duration = player && Number.isFinite(player.duration) ? player.duration : 0;
-      elements['time-current'].textContent = formatTime((Number(elements.seek.value) / 1000) * duration);
-    });
-    elements.seek.addEventListener('change', () => {
-      const duration = player && Number.isFinite(player.duration) ? player.duration : 0;
-      seeking = false;
-      applyControl({ type: 'control', action: 'seek', position_seconds: (Number(elements.seek.value) / 1000) * duration });
-    });
-    elements.volume.addEventListener('change', () => {
-      applyControl({ type: 'control', action: 'set_volume', volume: Number(elements.volume.value) });
-    });
   }
 })();

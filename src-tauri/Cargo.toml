@@ -1,12 +1,12 @@
 [package]
-name = "windows-media-station"
+name = "rollaplay"
 version = "0.1.0"
-description = "A private, local-first Windows media library and Cast controller"
-authors = ["Windows Media Station"]
+description = "RollaPlay — local media, loud attitude"
+authors = ["RockNRolla"]
 edition = "2021"
 
 [lib]
-name = "windows_media_station_lib"
+name = "rollaplay_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

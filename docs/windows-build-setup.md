@@ -51,7 +51,7 @@ $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 The Phase 4 source had never been compiled and needed these corrections:
 
 - `src-tauri/Cargo.toml`: enable the `protocol-asset` Tauri feature (the config
-  uses the asset protocol), and declare `[lib] name = "windows_media_station_lib"`
+  uses the asset protocol), and declare `[lib] name = "rollaplay_lib"`
   so `main.rs` resolves.
 - `cast_sender.rs`: derive `Clone` for `CastBridgeState`, compare the
   `RwLock` guard with `as_str()`, and lock the database before
@@ -79,6 +79,6 @@ An app icon set was generated in `src-tauri/icons/` (the archive omitted it) and
 - `pnpm tauri build`: produces the NSIS and MSI installers below.
 
 ```
-src-tauri/target/release/bundle/nsis/Windows Media Station_0.1.0_x64-setup.exe
-src-tauri/target/release/bundle/msi/Windows Media Station_0.1.0_x64_en-US.msi
+src-tauri/target/release/bundle/nsis/RollaPlay_0.1.0_x64-setup.exe
+src-tauri/target/release/bundle/msi/RollaPlay_0.1.0_x64_en-US.msi
 ```

@@ -30,7 +30,7 @@
 //! (default 30s), Previous restarts it instead of navigating backward.
 
 use rand::seq::SliceRandom;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -172,6 +172,13 @@ pub struct PlaylistItem {
     pub availability_state: String,
     pub duration_seconds: Option<f64>,
     pub position: i32,
+}
+
+#[derive(Clone, Debug)]
+pub struct PlaylistExportItem {
+    pub path: String,
+    pub filename: String,
+    pub duration_seconds: Option<f64>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -345,6 +352,21 @@ impl PlaybackEngine {
             message: data.message.clone(),
             last_error: data.last_error.clone(),
         }
+    }
+
+    /// Clears recorded watch history and the in-memory shuffle history. The
+    /// queue and current playback position are deliberately left untouched.
+    pub fn clear_watch_history(&self) -> Result<(), String> {
+        {
+            let mut data = self.lock();
+            let connection = self.db();
+            connection
+                .execute("DELETE FROM playback_history", [])
+                .map_err(|error| format!("Could not clear watch history: {error}"))?;
+            drop(connection);
+            data.history_stack.clear();
+        }
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -775,6 +797,17 @@ impl PlaybackEngine {
         // The database guard must be released before persist() re-locks it.
         let changed = {
             let connection = self.db();
+            // Keep a tombstone of the source file, so a rescan cannot resurrect
+            // a playlist the user deliberately deleted.
+            connection
+                .execute(
+                    "UPDATE playlist_file_imports
+                     SET playlist_id = NULL, status = 'deleted', error_message = NULL,
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE playlist_id = ?1",
+                    [playlist_id],
+                )
+                .map_err(|error| format!("Could not update the playlist import record: {error}"))?;
             // playlist_items are ON DELETE CASCADE; media files are never touched.
             connection
                 .execute("DELETE FROM playlists WHERE id=?1", [playlist_id])
@@ -836,19 +869,33 @@ impl PlaybackEngine {
         let exists = connection.query_row("SELECT 1 FROM playlists WHERE id=?1", [playlist_id], |_| Ok(())).optional().map_err(|e| e.to_string())?;
         if exists.is_none() { return Err("That playlist no longer exists.".to_string()); }
         let transaction = connection.unchecked_transaction().map_err(|error| error.to_string())?;
-        let mut added = 0usize;
-        for media_file_id in media_file_ids {
-            let valid: Option<i64> = transaction.query_row("SELECT id FROM media_files WHERE id=?1", [*media_file_id], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
-            if valid.is_none() { continue; }
-            let duplicate: Option<i64> = transaction.query_row("SELECT id FROM playlist_items WHERE playlist_id=?1 AND media_file_id=?2", params![playlist_id, media_file_id], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
-            if duplicate.is_some() { continue; }
-            let next: i64 = transaction.query_row("SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_items WHERE playlist_id=?1", [playlist_id], |row| row.get(0)).map_err(|e| e.to_string())?;
-            transaction.execute("INSERT INTO playlist_items(playlist_id, media_file_id, position) VALUES (?1, ?2, ?3)", params![playlist_id, media_file_id, next]).map_err(|e| e.to_string())?;
-            added += 1;
-        }
+        let added = insert_playlist_items_in_transaction(&transaction, playlist_id, media_file_ids)?;
         transaction.execute("UPDATE playlists SET updated_at=CURRENT_TIMESTAMP WHERE id=?1", [playlist_id]).map_err(|e| e.to_string())?;
         transaction.commit().map_err(|e| e.to_string())?;
         Ok(added)
+    }
+
+    /// Ordered local file paths used by M3U/WPL export. Only indexed media
+    /// files are included; no streaming URLs are ever stored here.
+    pub fn export_items(&self, playlist_id: i64) -> Result<Vec<PlaylistExportItem>, String> {
+        let connection = self.db();
+        let mut statement = connection
+            .prepare(
+                "SELECT f.path, f.filename, f.duration_seconds
+                 FROM playlist_items i JOIN media_files f ON f.id = i.media_file_id
+                 WHERE i.playlist_id = ?1 ORDER BY i.position, i.id",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([playlist_id], |row| {
+                Ok(PlaylistExportItem {
+                    path: row.get(0)?,
+                    filename: row.get(1)?,
+                    duration_seconds: row.get(2)?,
+                })
+            })
+            .map_err(|error| error.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
     }
 
     pub fn remove_playlist_item(&self, item_id: i64) -> Result<(), String> {
@@ -1339,6 +1386,51 @@ impl PlaybackEngine {
     }
 }
 
+/// Shared insert logic for manual additions and playlist-file imports.
+/// Keeps the original duplicate suppression and dense position numbering.
+pub(crate) fn insert_playlist_items_in_transaction(
+    transaction: &Transaction<'_>,
+    playlist_id: i64,
+    media_file_ids: &[i64],
+) -> Result<usize, String> {
+    let mut added = 0usize;
+    for media_file_id in media_file_ids {
+        let valid: Option<i64> = transaction
+            .query_row("SELECT id FROM media_files WHERE id=?1", [*media_file_id], |row| row.get(0))
+            .optional()
+            .map_err(|error| error.to_string())?;
+        if valid.is_none() {
+            continue;
+        }
+        let duplicate: Option<i64> = transaction
+            .query_row(
+                "SELECT id FROM playlist_items WHERE playlist_id=?1 AND media_file_id=?2",
+                params![playlist_id, media_file_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        if duplicate.is_some() {
+            continue;
+        }
+        let next: i64 = transaction
+            .query_row(
+                "SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_items WHERE playlist_id=?1",
+                [playlist_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute(
+                "INSERT INTO playlist_items(playlist_id, media_file_id, position) VALUES (?1, ?2, ?3)",
+                params![playlist_id, media_file_id, next],
+            )
+            .map_err(|error| error.to_string())?;
+        added += 1;
+    }
+    Ok(added)
+}
+
 impl EngineStateData {
     fn current_media_file_id(&self) -> Option<i64> {
         self.current_entry_id.as_ref().and_then(|id| self.queue.iter().find(|entry| &entry.entry_id == id).map(|entry| entry.media_file_id))
@@ -1522,6 +1614,25 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM media_files WHERE id IN (?1, ?2, ?3)", params![ids[0], ids[1], ids[2]], |row| row.get(0))
             .unwrap();
         assert_eq!(remaining, 3, "deleting a playlist must never delete media files");
+    }
+
+    #[test]
+    fn clearing_watch_history_keeps_queue_and_playlists() {
+        let fixture = Fixture::new();
+        let ids = fixture.media_ids(2);
+        let playlist_id = fixture.engine.create_playlist("History".to_string()).unwrap();
+        fixture.engine.add_playlist_items(playlist_id, &ids).unwrap();
+        fixture.engine.queue_add_playlist(playlist_id, AddMode::PlayNow).unwrap();
+
+        assert!(!fixture.engine.snapshot().history.is_empty());
+        let queue_len = fixture.engine.snapshot().queue.len();
+
+        fixture.engine.clear_watch_history().unwrap();
+
+        let snapshot = fixture.engine.snapshot();
+        assert!(snapshot.history.is_empty());
+        assert_eq!(snapshot.queue.len(), queue_len);
+        assert_eq!(fixture.engine.list_playlists().unwrap().len(), 1);
     }
 
     #[test]

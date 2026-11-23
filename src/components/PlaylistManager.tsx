@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useSWRConfig } from 'swr'
 import {
-  AlertCircle, Check, ChevronRight, GripVertical, ListMusic, LoaderCircle, Play, Plus,
-  RefreshCw, SkipForward, Trash2, X,
+  AlertCircle, Check, ChevronRight, Download, GripVertical, ListMusic, LoaderCircle, Play, Plus,
+  RefreshCw, SkipForward, Trash2, Upload, X,
 } from 'lucide-react'
 import {
-  addPlaylistItems, createPlaylist, deletePlaylist, formatDuration, getPlaybackState,
-  isPlaylistAvailable, listPlaylistItems, listPlaylists, playMediaNow, playPlaylist,
-  queueAdd, queueAddPlaylist, removePlaylistItem, renamePlaylist, reorderPlaylistItem, selectPlaylist,
-  type PlaybackSnapshot, type PlaylistItem, type PlaylistSummary,
+  addPlaylistItems, createPlaylist, deletePlaylist, exportPlaylistFile, formatDuration,
+  getPlaybackState, importPlaylistFiles, isPlaylistAvailable, listPlaylistItems, listPlaylists,
+  playMediaNow, playPlaylist, queueAdd, queueAddPlaylist, removePlaylistItem, renamePlaylist,
+  reorderPlaylistItem, selectPlaylist, type PlaybackSnapshot, type PlaylistFileFormat,
+  type PlaylistItem, type PlaylistSummary,
 } from '../playlist'
 import { debugLog, friendlyError } from '../diagnostics'
 
@@ -124,6 +125,43 @@ export default function PlaylistManager({
     })
   }
 
+  function importFiles() {
+    debugLog('playlists', 'button_click', { control: 'import_playlist_files' })
+    void guard(async () => {
+      const result = await importPlaylistFiles()
+      if (!result) {
+        onNotice('Playlist file selection cancelled.', 'info')
+        return
+      }
+      const parts: string[] = []
+      if (result.playlists_created) parts.push(`${result.playlists_created} created`)
+      if (result.playlists_updated) parts.push(`${result.playlists_updated} updated`)
+      if (result.items_imported) parts.push(`${result.items_imported} videos matched`)
+      if (result.skipped) parts.push(`${result.skipped} unchanged`)
+      if (result.failed) parts.push(`${result.failed} could not be imported`)
+      onNotice(
+        parts.length
+          ? `M3U/WPL import: ${parts.join(' · ')}.`
+          : 'No playlist files were imported.',
+        result.failed ? 'warning' : 'success',
+      )
+    })
+  }
+
+  function exportSelectedPlaylist(format: PlaylistFileFormat) {
+    const playlist = playlists.find((item) => item.id === selectedPlaylist)
+    if (!playlist) return
+    debugLog('playlists', 'button_click', { control: 'export_playlist_file', playlistId: playlist.id, format })
+    void guard(async () => {
+      const result = await exportPlaylistFile(playlist.id, playlist.name, format)
+      if (!result) {
+        onNotice('Playlist export cancelled.', 'info')
+        return
+      }
+      onNotice(`Exported ${result.items_written} video${result.items_written === 1 ? '' : 's'} as ${result.format.toUpperCase()}.`, 'success')
+    })
+  }
+
   return (
     <section className={`queue-section playlist-manager ${compact ? 'playlist-manager-compact' : ''}`} aria-labelledby={titleId}>
       <div className="queue-section-head">
@@ -171,6 +209,13 @@ export default function PlaylistManager({
             })
           }}
         ><Plus size={15} /> Create + add selected ({selectedMediaIds.length})</button>
+        <button
+          type="button"
+          className="queue-primary playlist-import"
+          disabled={busy || !available}
+          title="Create playlists from M3U, M3U8, or WPL files"
+          onClick={importFiles}
+        ><Upload size={15} /> Import M3U/WPL</button>
       </form>
 
       <div className="playlist-grid">
@@ -232,6 +277,8 @@ export default function PlaylistManager({
               onNotice(`${ids.length} video${ids.length === 1 ? '' : 's'} added to the playlist.`, 'success')
             })
           }} disabled={busy || !selectedMediaIds.length}>Add selected videos</button>
+          <button className="queue-primary" onClick={() => exportSelectedPlaylist('m3u')} disabled={busy || !items.length || !available} title="Export as M3U"><Download size={14} /> Export M3U</button>
+          <button className="queue-primary" onClick={() => exportSelectedPlaylist('wpl')} disabled={busy || !items.length || !available} title="Export as WPL"><Download size={14} /> Export WPL</button>
         </div>
         {items.length ? <div className="playlist-items">{items.map((item, index) => (
           <div key={item.id}

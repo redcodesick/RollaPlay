@@ -8,7 +8,7 @@ export function friendlyError(error: unknown): string {
   return String(error)
 }
 
-const SENSITIVE_KEY = /token|secret|password|credential|authorization|bearer|url|stream/i
+const SENSITIVE_KEY = /token|secret|password|credential|authorization|bearer|url|stream|path/i
 
 function redact(value: unknown, depth = 0): unknown {
   if (depth > 4) return '[depth]'

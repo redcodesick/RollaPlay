@@ -1,4 +1,5 @@
 import { isTauri } from '@tauri-apps/api/core'
+import { open, save } from '@tauri-apps/plugin-dialog'
 import { invokeTracked } from './diagnostics'
 
 export type PlaybackMode = 'manual' | 'auto'
@@ -35,6 +36,22 @@ export type PlaylistItem = {
   availability_state: string
   duration_seconds: number | null
   position: number
+}
+
+export type PlaylistFileFormat = 'm3u' | 'm3u8' | 'wpl'
+
+export type PlaylistFileImportResult = {
+  files_seen: number
+  playlists_created: number
+  playlists_updated: number
+  items_imported: number
+  skipped: number
+  failed: number
+}
+
+export type PlaylistFileExportResult = {
+  items_written: number
+  format: string
 }
 
 export type HistoryEntry = {
@@ -93,6 +110,40 @@ export const listPlaylistItems = (playlistId: number) =>
   call<PlaylistItem[]>('phase5_list_playlist_items', { playlistId })
 export const addPlaylistItems = (playlistId: number, mediaFileIds: number[]) =>
   call<number>('phase5_add_playlist_items', { playlistId, mediaFileIds })
+
+const PLAYLIST_FILE_FILTERS = [
+  { name: 'M3U and WPL playlists', extensions: ['m3u', 'm3u8', 'wpl'] },
+]
+
+/** Imports local playlist files; references resolve only to already indexed videos. */
+export async function importPlaylistFiles(): Promise<PlaylistFileImportResult | null> {
+  if (!isTauri()) return null
+  const selection = await open({
+    multiple: true,
+    filters: PLAYLIST_FILE_FILTERS,
+    title: 'Choose M3U or WPL playlist files',
+  })
+  if (!selection || (Array.isArray(selection) && !selection.length)) return null
+  const paths = Array.isArray(selection) ? selection : [selection]
+  return call<PlaylistFileImportResult>('import_playlist_files', { paths })
+}
+
+/** Exports an indexed playlist; returns null when the save dialog is cancelled. */
+export async function exportPlaylistFile(
+  playlistId: number,
+  playlistName: string,
+  format: PlaylistFileFormat,
+): Promise<PlaylistFileExportResult | null> {
+  if (!isTauri()) return null
+  const safeName = playlistName.replace(/[\\/:*?"<>|]/g, '_').trim() || 'Playlist'
+  const path = await save({
+    defaultPath: `${safeName}.${format}`,
+    filters: [{ name: `${format.toUpperCase()} playlist`, extensions: [format] }],
+    title: `Export playlist as ${format.toUpperCase()}`,
+  })
+  if (!path) return null
+  return call<PlaylistFileExportResult>('export_playlist_file', { playlistId, path })
+}
 export const removePlaylistItem = (itemId: number) =>
   call<void>('phase5_remove_playlist_item', { itemId })
 export const reorderPlaylistItem = (itemId: number, targetPosition: number) =>
@@ -110,6 +161,8 @@ export const queueRemove = (entryId: string) =>
 export const queueReorder = (entryId: string, targetPosition: number) =>
   call<PlaybackSnapshot>('phase5_queue_reorder', { entryId, targetPosition })
 export const queueClear = () => call<PlaybackSnapshot>('phase5_queue_clear')
+/** Clears watch history only; queue and playlists remain untouched. */
+export const clearWatchHistory = () => call<PlaybackSnapshot>('phase5_clear_watch_history')
 
 export const setPlaybackMode = (mode: PlaybackMode) =>
   call<PlaybackSnapshot>('phase5_set_mode', { mode })

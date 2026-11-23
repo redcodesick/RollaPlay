@@ -5,7 +5,7 @@ import {
   Shuffle, SkipBack, SkipForward, Trash2, X,
 } from 'lucide-react'
 import {
-  formatDuration, isPlaylistAvailable,
+  clearWatchHistory, formatDuration, isPlaylistAvailable,
   playNext as commandNext, playNow, playPrevious,
   queueAdd, queueClear, queueRemove, queueReorder, recoverPlayback,
   setPlaybackMode, setRepeat, setShuffle, totalDuration,
@@ -21,6 +21,7 @@ type Props = {
   onSelectionConsumed?: () => void
   onTogglePlay: () => void
   isPlaying: boolean
+  onHistoryCleared?: () => void
 }
 
 function friendlyError(error: unknown): string {
@@ -47,6 +48,7 @@ function entryLabel(tone: string) {
 
 export default function QueuePanel({
   snapshot, castConnected, selectedMediaIds, onNotice, onSelectionConsumed, onTogglePlay, isPlaying,
+  onHistoryCleared,
 }: Props) {
   const available = isPlaylistAvailable()
   const [busy, setBusy] = useState(false)
@@ -73,6 +75,15 @@ export default function QueuePanel({
 
   const queueDuration = useMemo(() => totalDuration(snapshot?.queue ?? []), [snapshot?.queue])
   const canControl = available && castConnected && !!snapshot?.current_entry_id
+
+  async function clearHistory() {
+    if (!snapshot?.history.length) return
+    await guard(async () => {
+      await clearWatchHistory()
+      onHistoryCleared?.()
+      onNotice('Watch history cleared.', 'success')
+    })
+  }
 
   return (
     <div className="queue-panel">
@@ -155,7 +166,7 @@ export default function QueuePanel({
       />
 
       <section className="queue-section" aria-labelledby="history-title">
-        <div className="queue-section-head"><div><div className="section-eyebrow">ACTIVITY</div><h2 id="history-title">Watch history</h2><p>Recorded from actual receiver playback.</p></div></div>
+        <div className="queue-section-head"><div><div className="section-eyebrow">ACTIVITY</div><h2 id="history-title">Watch history</h2><p>Recorded from actual receiver playback.</p></div><button className="queue-ghost-button" onClick={() => void clearHistory()} disabled={busy || !snapshot?.history.length}><Trash2 size={15} /> Clear history</button></div>
         <div className="history-list">
           {snapshot?.history.length ? snapshot.history.map((entry) => (
             <div key={entry.id} className="history-row"><Clock3 size={14} /><span title={entry.filename}>{entry.filename}</span><small>{entry.completion_state ?? 'started'}</small><small>{formatDuration(entry.watched_seconds)}</small></div>

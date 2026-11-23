@@ -3,31 +3,38 @@ use serde::Serialize;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{Emitter, Manager, State};
 use walkdir::WalkDir;
 
+mod cast_discovery;
 mod cast_sender;
 mod media_server;
 mod network;
 mod playback_orchestrator;
 mod playlist;
+mod playlist_file;
 mod secret;
 mod sender_embed;
 mod thumbnail;
 
+use cast_discovery::CastDevice;
 use cast_sender::{CastDiagnosticsSnapshot, CastEventReport, CastPlaybackSnapshot, CastSenderManager, CastSenderStatus};
 use media_server::{ConnectionTestResult, MediaServerManager, MediaServerStatus, StreamDiagnosticsSnapshot};
 use network::NetworkDiagnostics;
 use playback_orchestrator::PlaybackOrchestrator;
 use playlist::{
     AddMode, EngineEffect, PlaybackEngine, PlaybackMode, PlaylistItem, PlaylistSummary, RepeatMode,
+};
+use playlist_file::{
+    export_m3u, export_wpl, parse_playlist_file, reference_to_local_path, ExportItem,
+    ParsedPlaylistFile, PlaylistFileKind,
 };
 use tauri::Listener;
 
@@ -92,6 +99,7 @@ impl Drop for ScanGuard {
 const VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mkv", "avi", "mov", "wmv", "webm", "mpeg", "mpg", "m4v", "3gp",
 ];
+const PLAYLIST_EXTENSIONS: &[&str] = &["m3u", "m3u8", "wpl"];
 
 #[derive(Serialize)]
 struct LocalStatus {
@@ -140,6 +148,7 @@ struct ScanResult {
     temporarily_unavailable_files: usize,
     permanently_missing_files: usize,
     inaccessible_entries: usize,
+    playlists_imported: usize,
     cancelled: bool,
 }
 
@@ -169,6 +178,40 @@ struct IndexedFile {
     extension: String,
     size_bytes: i64,
     modified_at: String,
+}
+
+#[derive(Clone)]
+struct PlaylistFileCandidate {
+    path: PathBuf,
+    filename: String,
+    extension: String,
+    size_bytes: i64,
+    modified_at: String,
+    directory_id: Option<i64>,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+struct PlaylistFileImportSummary {
+    files_seen: usize,
+    playlists_created: usize,
+    playlists_updated: usize,
+    items_imported: usize,
+    skipped: usize,
+    failed: usize,
+}
+
+#[derive(Serialize, Clone, Debug)]
+struct PlaylistFileExportResult {
+    items_written: usize,
+    format: String,
+}
+
+#[derive(Clone)]
+struct ExistingPlaylistFileImport {
+    playlist_id: Option<i64>,
+    size_bytes: i64,
+    modified_at: String,
+    status: String,
 }
 
 #[tauri::command]
@@ -439,6 +482,109 @@ fn cancel_media_scan(scans: State<'_, ScanRegistry>, directory_id: i64) -> Resul
     }
 }
 
+#[tauri::command]
+fn import_playlist_files(
+    database: State<'_, AppDatabase>,
+    paths: Vec<String>,
+) -> Result<PlaylistFileImportSummary, String> {
+    let mut candidates = Vec::new();
+    let mut invalid = 0;
+    {
+        let connection = database.0.lock().map_err(|_| "Local database is unavailable".to_string())?;
+        for raw in &paths {
+            let path = canonicalize_media_path(Path::new(raw)).unwrap_or_else(|_| PathBuf::from(raw));
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if PlaylistFileKind::from_extension(&extension).is_none() || !path.is_file() {
+                invalid += 1;
+                continue;
+            }
+            let (size_bytes, modified_at, filename) = match file_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    invalid += 1;
+                    continue;
+                }
+            };
+            let directory_id = directory_id_for_playlist_path(&connection, &path)?;
+            candidates.push(PlaylistFileCandidate {
+                path,
+                filename,
+                extension,
+                size_bytes,
+                modified_at,
+                directory_id,
+            });
+        }
+    }
+    let mut summary =
+        import_playlist_file_candidates(&database.0, &candidates, &AtomicBool::new(false))?;
+    summary.files_seen = paths.len();
+    summary.failed += invalid;
+    Ok(summary)
+}
+
+#[tauri::command]
+fn export_playlist_file(
+    orchestrator: State<'_, PlaybackOrchestrator>,
+    playlist_id: i64,
+    path: String,
+) -> Result<PlaylistFileExportResult, String> {
+    let name = orchestrator
+        .engine()
+        .list_playlists()?
+        .into_iter()
+        .find(|playlist| playlist.id == playlist_id)
+        .map(|playlist| playlist.name)
+        .ok_or_else(|| "That playlist no longer exists.".to_string())?;
+    let items = orchestrator.engine().export_items(playlist_id)?;
+    let output = PathBuf::from(&path);
+    let extension = output
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let kind = PlaylistFileKind::from_extension(&extension)
+        .ok_or_else(|| "Choose an M3U, M3U8, or WPL file name.".to_string())?;
+    let output_directory = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let export_items = items
+        .into_iter()
+        .map(|item| ExportItem {
+            path: PathBuf::from(item.path),
+            filename: item.filename,
+            duration_seconds: item.duration_seconds,
+        })
+        .collect::<Vec<_>>();
+
+    let content = match kind {
+        PlaylistFileKind::M3u | PlaylistFileKind::M3u8 => {
+            export_m3u(&name, &export_items, output_directory)
+        }
+        PlaylistFileKind::Wpl => export_wpl(&name, &export_items, output_directory),
+    };
+    // Windows Media Player expects UTF-16LE for WPL; M3U/M3U8 stay UTF-8.
+    let bytes = if kind == PlaylistFileKind::Wpl {
+        let mut bytes = vec![0xff, 0xfe];
+        for unit in content.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        bytes
+    } else {
+        content.into_bytes()
+    };
+    fs::write(&output, bytes).map_err(|_| "Could not save the playlist file.".to_string())?;
+    Ok(PlaylistFileExportResult {
+        items_written: export_items.len(),
+        format: kind.extension().to_string(),
+    })
+}
+
 #[derive(Clone)]
 struct ExistingMediaFile {
     id: i64,
@@ -468,6 +614,7 @@ fn scan_directory(
         }
     };
     let mut indexed_files = Vec::new();
+    let mut playlist_files = Vec::new();
     let mut inaccessible_entries = 0;
     emit_progress(ScanProgress {
         directory_id,
@@ -498,11 +645,14 @@ fn scan_directory(
         }
         let path = entry.path();
         let extension = match path.extension().and_then(|value| value.to_str()) {
-            Some(extension) if VIDEO_EXTENSIONS.iter().any(|known| extension.eq_ignore_ascii_case(known)) => {
-                extension.to_ascii_lowercase()
-            }
-            _ => continue,
+            Some(extension) => extension.to_ascii_lowercase(),
+            None => continue,
         };
+        let is_video = VIDEO_EXTENSIONS.iter().any(|known| extension == *known);
+        let is_playlist = PLAYLIST_EXTENSIONS.iter().any(|known| extension == *known);
+        if !is_video && !is_playlist {
+            continue;
+        }
         let metadata = match entry.metadata() {
             Ok(metadata) => metadata,
             Err(_) => {
@@ -527,13 +677,24 @@ fn scan_directory(
                 continue;
             }
         };
-        indexed_files.push(IndexedFile {
-            path: path.to_string_lossy().into_owned(),
-            filename,
-            extension,
-            size_bytes,
-            modified_at,
-        });
+        if is_video {
+            indexed_files.push(IndexedFile {
+                path: path.to_string_lossy().into_owned(),
+                filename,
+                extension,
+                size_bytes,
+                modified_at,
+            });
+        } else {
+            playlist_files.push(PlaylistFileCandidate {
+                path: path.to_path_buf(),
+                filename,
+                extension,
+                size_bytes,
+                modified_at,
+                directory_id: Some(directory_id),
+            });
+        }
         if indexed_files.len() % 25 == 0 {
             emit_progress(ScanProgress {
                 directory_id,
@@ -684,6 +845,11 @@ fn scan_directory(
         )
         .map_err(|_| "Could not save scan completion".to_string())?;
     transaction.commit().map_err(|_| "Could not finish updating the media index".to_string())?;
+    drop(connection);
+
+    // Playlist files are imported only after the video transaction is durable,
+    // so their references resolve against the freshly indexed media files.
+    let imported = import_playlist_file_candidates(database, &playlist_files, cancel)?;
 
     let result = ScanResult {
         directory_id,
@@ -693,6 +859,7 @@ fn scan_directory(
         temporarily_unavailable_files,
         permanently_missing_files,
         inaccessible_entries,
+        playlists_imported: imported.playlists_created + imported.playlists_updated,
         cancelled: false,
     };
     emit_progress(ScanProgress {
@@ -702,6 +869,345 @@ fn scan_directory(
         phase: "complete".to_string(),
     });
     Ok(result)
+}
+
+fn file_metadata(path: &Path) -> Result<(i64, String, String), String> {
+    let metadata = fs::metadata(path).map_err(|_| "Could not read file metadata".to_string())?;
+    let modified_at = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos().to_string())
+        .unwrap_or_else(|| "0".to_string());
+    let size_bytes = i64::try_from(metadata.len())
+        .map_err(|_| "This playlist file is too large to import".to_string())?;
+    let filename = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Ok((size_bytes, modified_at, filename))
+}
+
+/// Uses the stored canonical form when possible and removes `.`/`..` segments
+/// otherwise, so relative playlist references can be matched to indexed paths.
+fn normalize_media_path(path: &Path) -> PathBuf {
+    if let Ok(canonical) = canonicalize_media_path(path) {
+        return canonical;
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn media_index_key(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if cfg!(windows) {
+        text.replace('/', "\\").to_ascii_lowercase()
+    } else {
+        text.into_owned()
+    }
+}
+
+fn playlist_exists(transaction: &Transaction<'_>, playlist_id: i64) -> Result<bool, String> {
+    Ok(transaction
+        .query_row("SELECT 1 FROM playlists WHERE id = ?1", [playlist_id], |_| Ok(()))
+        .optional()
+        .map_err(|error| error.to_string())?
+        .is_some())
+}
+
+fn create_imported_playlist(transaction: &Transaction<'_>, requested_name: &str) -> Result<i64, String> {
+    let name: String = requested_name.chars().take(120).collect();
+    let name = if name.trim().is_empty() { "Imported playlist" } else { name.trim() };
+    transaction
+        .execute("INSERT INTO playlists(name) VALUES (?1)", [name])
+        .map_err(|error| error.to_string())?;
+    Ok(transaction.last_insert_rowid())
+}
+
+fn record_playlist_file_import(
+    transaction: &Transaction<'_>,
+    candidate: &PlaylistFileCandidate,
+    playlist_id: Option<i64>,
+    status: &str,
+    error_message: Option<&str>,
+) -> Result<(), String> {
+    transaction
+        .execute(
+            "INSERT INTO playlist_file_imports(
+                 path, directory_id, playlist_id, filename, extension, size_bytes, modified_at,
+                 status, error_message
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(path) DO UPDATE SET
+                 directory_id = excluded.directory_id,
+                 playlist_id = excluded.playlist_id,
+                 filename = excluded.filename,
+                 extension = excluded.extension,
+                 size_bytes = excluded.size_bytes,
+                 modified_at = excluded.modified_at,
+                 status = excluded.status,
+                 error_message = excluded.error_message,
+                 updated_at = CURRENT_TIMESTAMP",
+            params![
+                candidate.path.to_string_lossy().into_owned(),
+                candidate.directory_id,
+                playlist_id,
+                candidate.filename,
+                candidate.extension,
+                candidate.size_bytes,
+                candidate.modified_at,
+                status,
+                error_message,
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Resolves only to media files that were already indexed under an active
+/// folder. Remote references and unknown paths are ignored, never stored.
+fn resolve_playlist_references(
+    parsed: &ParsedPlaylistFile,
+    playlist_path: &Path,
+    roots: &[(PathBuf, String)],
+    media_index: &HashMap<String, i64>,
+) -> Vec<i64> {
+    let parent = playlist_path.parent().unwrap_or_else(|| Path::new(""));
+    let mut resolved = Vec::new();
+    for entry in &parsed.entries {
+        let Some(local) = reference_to_local_path(&entry.reference) else { continue };
+        let mut candidates = Vec::new();
+        if local.is_absolute() {
+            candidates.push(local);
+        } else {
+            candidates.push(parent.join(&local));
+            for (root, _) in roots {
+                candidates.push(root.join(&local));
+            }
+        }
+        for candidate in candidates {
+            let key = media_index_key(&normalize_media_path(&candidate));
+            if let Some(media_file_id) = media_index.get(&key) {
+                if !resolved.contains(media_file_id) {
+                    resolved.push(*media_file_id);
+                }
+                break;
+            }
+        }
+    }
+    resolved
+}
+
+fn directory_id_for_playlist_path(
+    connection: &Connection,
+    path: &Path,
+) -> Result<Option<i64>, String> {
+    let mut statement = connection
+        .prepare("SELECT id, path FROM media_directories WHERE is_active = 1")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(statement);
+
+    let file_key = media_index_key(path);
+    let mut best: Option<(i64, usize)> = None;
+    for (directory_id, root) in rows {
+        let root_key = media_index_key(Path::new(&root));
+        if !file_key.starts_with(&root_key) {
+            continue;
+        }
+        let rest = &file_key[root_key.len()..];
+        if !rest.is_empty() && !rest.starts_with('\\') && !rest.starts_with('/') {
+            continue;
+        }
+        if best.map(|(_, length)| root_key.len() > length).unwrap_or(true) {
+            best = Some((directory_id, root_key.len()));
+        }
+    }
+    Ok(best.map(|(directory_id, _)| directory_id))
+}
+
+fn import_playlist_file_candidates(
+    database: &Arc<Mutex<Connection>>,
+    candidates: &[PlaylistFileCandidate],
+    cancel: &AtomicBool,
+) -> Result<PlaylistFileImportSummary, String> {
+    let mut summary = PlaylistFileImportSummary::default();
+    if candidates.is_empty() {
+        return Ok(summary);
+    }
+    let connection = database
+        .lock()
+        .map_err(|_| "Local database is unavailable".to_string())?;
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|_| "Could not import playlist files".to_string())?;
+
+    let roots = {
+        let mut statement = transaction
+            .prepare("SELECT path FROM media_directories WHERE is_active = 1")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        rows.into_iter().map(|path| (PathBuf::from(&path), path)).collect::<Vec<_>>()
+    };
+
+    let media_index = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT f.path, f.id FROM media_files f
+                 JOIN media_directories d ON d.id = f.directory_id
+                 WHERE d.is_active = 1 AND f.is_available = 1",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        rows.into_iter()
+            .map(|(path, id)| (media_index_key(Path::new(&path)), id))
+            .collect::<HashMap<_, _>>()
+    };
+
+    let existing = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT path, playlist_id, size_bytes, modified_at, status FROM playlist_file_imports",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    ExistingPlaylistFileImport {
+                        playlist_id: row.get(1)?,
+                        size_bytes: row.get(2)?,
+                        modified_at: row.get(3)?,
+                        status: row.get(4)?,
+                    },
+                ))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        rows.into_iter().collect::<HashMap<_, _>>()
+    };
+
+    for candidate in candidates {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        summary.files_seen += 1;
+        let path_key = candidate.path.to_string_lossy().into_owned();
+        let existing_row = existing.get(&path_key).cloned();
+        let unchanged = existing_row.as_ref().filter(|row| {
+            row.size_bytes == candidate.size_bytes && row.modified_at == candidate.modified_at
+        });
+
+        // A tombstone is kept when a user deletes an imported playlist, so a
+        // later rescan of the same file cannot resurrect it.
+        if let Some(row) = unchanged {
+            if row.status == "deleted" {
+                summary.skipped += 1;
+                continue;
+            }
+            if row.status == "imported" {
+                let still_exists = row
+                    .playlist_id
+                    .map(|id| playlist_exists(&transaction, id))
+                    .transpose()?
+                    .unwrap_or(false);
+                if still_exists {
+                    summary.skipped += 1;
+                    continue;
+                }
+            }
+        }
+
+        let parsed = match parse_playlist_file(&candidate.path) {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                record_playlist_file_import(
+                    &transaction,
+                    candidate,
+                    None,
+                    "error",
+                    Some("This playlist file could not be read."),
+                )?;
+                summary.failed += 1;
+                continue;
+            }
+        };
+        let resolved = resolve_playlist_references(&parsed, &candidate.path, &roots, &media_index);
+        if resolved.is_empty() {
+            record_playlist_file_import(
+                &transaction,
+                candidate,
+                None,
+                "error",
+                Some("No local files in this playlist are indexed yet."),
+            )?;
+            summary.failed += 1;
+            continue;
+        }
+
+        let existing_playlist_id = existing_row
+            .as_ref()
+            .and_then(|row| row.playlist_id)
+            .filter(|id| playlist_exists(&transaction, *id).unwrap_or(false));
+        let playlist_id = if let Some(id) = existing_playlist_id {
+            let name: String = parsed.name.clone().unwrap_or_else(|| "Imported playlist".to_string());
+            transaction
+                .execute(
+                    "UPDATE playlists SET name = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                    params![name.chars().take(120).collect::<String>(), id],
+                )
+                .map_err(|error| error.to_string())?;
+            transaction
+                .execute("DELETE FROM playlist_items WHERE playlist_id = ?1", [id])
+                .map_err(|error| error.to_string())?;
+            summary.playlists_updated += 1;
+            id
+        } else {
+            let id = create_imported_playlist(
+                &transaction,
+                parsed.name.as_deref().unwrap_or("Imported playlist"),
+            )?;
+            summary.playlists_created += 1;
+            id
+        };
+
+        let inserted =
+            playlist::insert_playlist_items_in_transaction(&transaction, playlist_id, &resolved)?;
+        summary.items_imported += inserted;
+        record_playlist_file_import(
+            &transaction,
+            candidate,
+            Some(playlist_id),
+            "imported",
+            None,
+        )?;
+    }
+
+    transaction
+        .commit()
+        .map_err(|_| "Could not finish importing playlist files".to_string())?;
+    Ok(summary)
 }
 
 fn missing_file_availability_state(inaccessible_entries: usize) -> &'static str {
@@ -761,6 +1267,7 @@ fn cancelled_scan_result(directory_id: i64, files_found: usize, inaccessible_ent
         temporarily_unavailable_files: 0,
         permanently_missing_files: 0,
         inaccessible_entries,
+        playlists_imported: 0,
         cancelled: true,
     }
 }
@@ -1204,6 +1711,15 @@ fn clear_media_stream_diagnostics(server: State<'_, MediaServerManager>) {
     server.clear_stream_diagnostics();
 }
 
+/// Real, on-demand mDNS discovery for the in-app Connect panel. This does not
+/// talk to the sender page and never returns credentials or streaming URLs.
+#[tauri::command]
+async fn discover_cast_devices() -> Result<Vec<CastDevice>, String> {
+    tokio::task::spawn_blocking(|| cast_discovery::discover(Duration::from_secs(2)))
+        .await
+        .map_err(|_| "Cast discovery could not start.".to_string())?
+}
+
 #[tauri::command]
 fn get_cast_sender_status(cast: State<'_, CastSenderManager>) -> CastSenderStatus {
     cast.status()
@@ -1285,6 +1801,9 @@ async fn hide_cast_sender(cast: State<'_, CastSenderManager>) -> Result<(), Stri
 
 #[tauri::command]
 async fn stop_cast_sender(cast: State<'_, CastSenderManager>) -> Result<CastSenderStatus, String> {
+    // Ask the receiver to end the session before the bridge and Chrome die.
+    // Best-effort: a disconnected sender must not block shutdown.
+    let _ = cast.stop_playback();
     cast.shutdown().await;
     Ok(cast.status())
 }
@@ -1361,6 +1880,16 @@ async fn cast_load_media(
     })
 }
 
+fn sanitize_cast_field(value: String, max_chars: usize) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(max_chars)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 #[tauri::command]
 async fn cast_send_control(
     server: State<'_, MediaServerManager>,
@@ -1369,10 +1898,13 @@ async fn cast_send_control(
     position_seconds: Option<f64>,
     volume: Option<f64>,
     muted: Option<bool>,
+    device_id: Option<String>,
+    device_name: Option<String>,
 ) -> Result<(), String> {
     if !matches!(
         action.as_str(),
-        "play" | "pause" | "toggle_play" | "stop" | "seek" | "set_volume" | "set_mute" | "disconnect" | "close_sender"
+        "play" | "pause" | "toggle_play" | "stop" | "seek" | "set_volume" | "set_mute"
+            | "disconnect" | "request_session" | "close_sender"
     ) {
         return Err("Unknown Cast control".to_string());
     }
@@ -1382,6 +1914,8 @@ async fn cast_send_control(
         "position_seconds": position_seconds,
         "volume": volume,
         "muted": muted,
+        "device_id": device_id.map(|value| sanitize_cast_field(value, 120)),
+        "device_name": device_name.map(|value| sanitize_cast_field(value, 120)),
     });
     let result = cast.send_command(command);
     if action == "stop" {
@@ -1440,6 +1974,16 @@ async fn phase5_finish(
 #[tauri::command]
 fn phase5_get_state(orchestrator: State<'_, PlaybackOrchestrator>) -> playlist::PlaybackSnapshot {
     orchestrator.snapshot()
+}
+
+/// Clears watch history only. Queue, playlists and indexed media are untouched.
+#[tauri::command]
+fn phase5_clear_watch_history(
+    orchestrator: State<'_, PlaybackOrchestrator>,
+) -> Result<playlist::PlaybackSnapshot, String> {
+    orchestrator.clear_watch_history()?;
+    orchestrator.emit_snapshot();
+    Ok(orchestrator.snapshot())
 }
 
 // Playlists ---------------------------------------------------------------
@@ -1841,6 +2385,30 @@ pub(crate) fn open_database(app_data_dir: &Path) -> Result<Connection, Box<dyn s
         "INSERT OR IGNORE INTO schema_migrations(version) VALUES (4)",
         [],
     )?;
+    // M3U/M3U8/WPL imports. `status = 'deleted'` is a tombstone that prevents
+    // a user-deleted imported playlist from being recreated by a later scan.
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS playlist_file_imports (
+             path TEXT PRIMARY KEY,
+             directory_id INTEGER REFERENCES media_directories(id) ON DELETE SET NULL,
+             playlist_id INTEGER REFERENCES playlists(id) ON DELETE SET NULL,
+             filename TEXT NOT NULL,
+             extension TEXT NOT NULL,
+             size_bytes INTEGER NOT NULL CHECK(size_bytes >= 0),
+             modified_at TEXT NOT NULL,
+             status TEXT NOT NULL DEFAULT 'imported'
+               CHECK(status IN ('imported', 'error', 'deleted')),
+             error_message TEXT,
+             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+         );
+         CREATE INDEX IF NOT EXISTS idx_playlist_file_imports_playlist
+           ON playlist_file_imports(playlist_id);",
+    )?;
+    connection.execute(
+        "INSERT OR IGNORE INTO schema_migrations(version) VALUES (5)",
+        [],
+    )?;
     Ok(connection)
 }
 
@@ -1917,6 +2485,10 @@ pub fn run() {
                     return;
                 }
                 tauri::async_runtime::spawn(async move {
+                    // The X button must stop receiver playback, not merely kill
+                    // the sender process and leave the session alive. Ask the
+                    // receiver to leave before the media server goes away.
+                    let _ = cast.stop_playback();
                     server.shutdown().await;
                     sender_embed::detach_embedded();
                     cast.shutdown().await;
@@ -1933,6 +2505,8 @@ pub fn run() {
             list_media_files,
             scan_media_directory,
             cancel_media_scan,
+            import_playlist_files,
+            export_playlist_file,
             get_thumbnail_settings,
             set_thumbnail_settings,
             refresh_thumbnail,
@@ -1948,6 +2522,7 @@ pub fn run() {
             test_media_server_connection,
             get_media_stream_diagnostics,
             clear_media_stream_diagnostics,
+            discover_cast_devices,
             get_cast_sender_status,
             launch_cast_sender,
             embed_cast_sender,
@@ -1961,6 +2536,7 @@ pub fn run() {
             cast_send_control,
             verify_cast_media_url,
             phase5_get_state,
+            phase5_clear_watch_history,
             phase5_list_playlists,
             phase5_create_playlist,
             phase5_rename_playlist,
@@ -1986,7 +2562,7 @@ pub fn run() {
             phase5_recover
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run Windows Media Station");
+        .expect("failed to run RollaPlay");
 }
 
 #[cfg(test)]
@@ -2019,6 +2595,25 @@ mod tests {
 
     fn indexed_count(database: &Arc<Mutex<Connection>>) -> i64 {
         database.lock().unwrap().query_row("SELECT COUNT(*) FROM media_files", [], |row| row.get(0)).unwrap()
+    }
+
+    fn playlist_count(database: &Arc<Mutex<Connection>>) -> i64 {
+        database.lock().unwrap().query_row("SELECT COUNT(*) FROM playlists", [], |row| row.get(0)).unwrap()
+    }
+
+    fn playlist_filenames(database: &Arc<Mutex<Connection>>, playlist_id: i64) -> Vec<String> {
+        let connection = database.lock().unwrap();
+        let mut statement = connection
+            .prepare(
+                "SELECT f.filename FROM playlist_items i JOIN media_files f ON f.id = i.media_file_id
+                 WHERE i.playlist_id = ?1 ORDER BY i.position, i.id",
+            )
+            .unwrap();
+        statement
+            .query_map([playlist_id], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
     }
 
     #[test]
@@ -2171,6 +2766,116 @@ mod tests {
         let references = database.lock().unwrap().query_row("SELECT COUNT(*) FROM playlist_items WHERE playlist_id = ?1", [playlist_id], |row| row.get::<_, i64>(0)).unwrap();
         assert_eq!(state, "removed_from_library");
         assert_eq!(references, 1);
+    }
+
+    #[test]
+    fn m3u_scan_imports_only_indexed_files_and_is_idempotent() {
+        let (_temporary, database, directory_id, root) = fixture();
+        fs::write(root.join("one.mp4"), b"one").unwrap();
+        fs::write(root.join("two.mp4"), b"two").unwrap();
+        let playlist_path = root.join("Road Trip.m3u");
+        fs::write(
+            &playlist_path,
+            "#EXTM3U\r\n#PLAYLIST:Road Trip\r\n#EXTINF:99,One\r\none.mp4\r\n\
+             http://example.com/stream.m3u8\r\nmissing.mp4\r\n",
+        )
+        .unwrap();
+
+        let first = scan(&database, directory_id, root.clone()).unwrap();
+        assert_eq!(first.playlists_imported, 1);
+        assert_eq!(playlist_count(&database), 1);
+        let (playlist_id, name) = database
+            .lock()
+            .unwrap()
+            .query_row("SELECT id, name FROM playlists", [], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap();
+        assert_eq!(name, "Road Trip");
+        assert_eq!(playlist_filenames(&database, playlist_id), vec!["one.mp4"]);
+
+        let second = scan(&database, directory_id, root.clone()).unwrap();
+        assert_eq!(second.playlists_imported, 0);
+        assert_eq!(playlist_count(&database), 1);
+        assert_eq!(playlist_filenames(&database, playlist_id), vec!["one.mp4"]);
+
+        fs::write(
+            &playlist_path,
+            "#EXTM3U\r\n#PLAYLIST:Road Trip Remix\r\ntwo.mp4\r\none.mp4\r\n",
+        )
+        .unwrap();
+        let third = scan(&database, directory_id, root).unwrap();
+        assert_eq!(third.playlists_imported, 1);
+        assert_eq!(playlist_count(&database), 1);
+        assert_eq!(database.lock().unwrap().query_row("SELECT name FROM playlists WHERE id = ?1", [playlist_id], |row| row.get::<_, String>(0)).unwrap(), "Road Trip Remix");
+        assert_eq!(playlist_filenames(&database, playlist_id), vec!["two.mp4", "one.mp4"]);
+    }
+
+    #[test]
+    fn wpl_scan_decodes_utf16_and_xml_entities() {
+        let (_temporary, database, directory_id, root) = fixture();
+        fs::write(root.join("a & b.mp4"), b"video").unwrap();
+        let source = "<?wpl version=\"1.0\"?><smil><head><title>Rock &amp; Roll</title></head>\
+                      <body><seq><media src=\"a &amp; b.mp4\"/></seq></body></smil>";
+        let units: Vec<u16> = source.encode_utf16().collect();
+        let mut bytes = vec![0xff, 0xfe];
+        for unit in units {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        fs::write(root.join("Roadie.wpl"), bytes).unwrap();
+
+        let result = scan(&database, directory_id, root).unwrap();
+        assert_eq!(result.playlists_imported, 1);
+        let (playlist_id, name) = database
+            .lock()
+            .unwrap()
+            .query_row("SELECT id, name FROM playlists", [], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap();
+        assert_eq!(name, "Rock & Roll");
+        assert_eq!(playlist_filenames(&database, playlist_id), vec!["a & b.mp4"]);
+    }
+
+    #[test]
+    fn deleting_an_imported_playlist_keeps_a_rescan_tombstone() {
+        let (_temporary, database, directory_id, root) = fixture();
+        fs::write(root.join("one.mp4"), b"one").unwrap();
+        fs::write(root.join("Saved.m3u"), "#EXTM3U\none.mp4\n").unwrap();
+        scan(&database, directory_id, root.clone()).unwrap();
+        let playlist_id = database
+            .lock()
+            .unwrap()
+            .query_row("SELECT id FROM playlists", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+
+        let engine = PlaybackEngine::new(Arc::clone(&database)).unwrap();
+        engine.delete_playlist(playlist_id).unwrap();
+        assert_eq!(playlist_count(&database), 0);
+        assert_eq!(
+            database.lock().unwrap().query_row(
+                "SELECT status FROM playlist_file_imports WHERE playlist_id IS NULL",
+                [],
+                |row| row.get::<_, String>(0),
+            ).unwrap(),
+            "deleted",
+        );
+
+        let rescan = scan(&database, directory_id, root).unwrap();
+        assert_eq!(rescan.playlists_imported, 0);
+        assert_eq!(playlist_count(&database), 0);
+    }
+
+    #[test]
+    fn cancelled_scan_does_not_import_playlist_files() {
+        let (_temporary, database, directory_id, root) = fixture();
+        fs::write(root.join("one.mp4"), b"one").unwrap();
+        fs::write(root.join("Saved.m3u"), "#EXTM3U\none.mp4\n").unwrap();
+        let cancel = AtomicBool::new(true);
+        let result = scan_directory(&database, directory_id, root, &cancel, |_| {}).unwrap();
+        assert!(result.cancelled);
+        assert_eq!(result.playlists_imported, 0);
+        assert_eq!(playlist_count(&database), 0);
     }
 
     #[test]

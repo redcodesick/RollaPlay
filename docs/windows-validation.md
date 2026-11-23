@@ -1,4 +1,4 @@
-# Windows Media Station — Windows Validation Checklist
+# RollaPlay — Windows Validation Checklist
 
 **Status: automated and packaged-app checks executed on Windows; a real Cast receiver ("Living Room TV") was discovered and a live session was established. Playback-to-completion validation is still outstanding.** The build workspace has Windows, Rust/Cargo, Node/pnpm and Chrome. Record the Windows version, app commit, device model, test media characteristics, and result for every hardware run. Do not mark a check complete from the browser preview or from mocked tests.
 
@@ -126,7 +126,7 @@ Use the Xiaomi Mi Box, Chrome sender and same-LAN Windows machine from [docs/cas
 
 ## First-run setup wizard — packaged executable (executed on Windows)
 
-Environment: Windows 11 Enterprise 10.0.26100 x64, Chrome 157.0.8103.79, app 0.1.0 on `feat/media-library-indexing`. Binary: `src-tauri/target/release/windows-media-station.exe`; NSIS and MSI bundles were produced by `pnpm tauri build`. Wizard control flow was captured through the temporary `wizard_diag_log` command into `%LOCALAPPDATA%\app.windowsmediastation.local\wizard-diagnostics.log`; all values are redacted and no token, credential or streaming URL is written there.
+Environment: Windows 11 Enterprise 10.0.26100 x64, Chrome 157.0.8103.79, app 0.1.0 on `feat/media-library-indexing`. Binary: `src-tauri/target/release/rollaplay.exe`; NSIS and MSI bundles were produced by `pnpm tauri build`. Wizard control flow was captured through the temporary `wizard_diag_log` command into `%LOCALAPPDATA%\app.windowsmediastation.local\wizard-diagnostics.log`; all values are redacted and no token, credential or streaming URL is written there.
 
 - [x] **Auto-open on first run (PASS).** A fresh profile with no completion flag opened the wizard at step 1; `startup_check` logged `databaseReady: true` and the active directory count. DB-not-ready state shows a visible error and does not enable the wizard.
 - [x] **Native folder picker (PASS).** `Select media folders` invoked `open({ directory: true, multiple: true })`; the Windows dialog appeared ("Choose folders containing videos"). Selecting `F:\rocking\project\test-media\Videos` returned one path, called `add_media_directory`, and started `scan_media_directory`.

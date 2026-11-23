@@ -39,6 +39,10 @@ impl PlaybackOrchestrator {
         self.engine.snapshot()
     }
 
+    pub fn clear_watch_history(&self) -> Result<(), String> {
+        self.engine.clear_watch_history()
+    }
+
     pub fn emit_snapshot(&self) {
         let _ = self.app.emit("phase5-snapshot", self.snapshot());
     }

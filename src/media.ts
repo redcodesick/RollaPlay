@@ -44,6 +44,7 @@ export type ScanResult = {
   temporarily_unavailable_files: number
   permanently_missing_files: number
   inaccessible_entries: number
+  playlists_imported: number
   cancelled: boolean
 }
 

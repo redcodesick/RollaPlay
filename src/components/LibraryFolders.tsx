@@ -129,7 +129,7 @@ export function useMediaFolders() {
       await Promise.all([refreshFiles(), refreshDirectories()])
       const summary = result.cancelled
         ? 'Scan cancelled. No partial index changes were saved.'
-        : `${result.files_indexed} videos indexed${result.renamed_files ? ` · ${result.renamed_files} renamed files matched` : ''}${result.files_removed ? ` · ${result.files_removed} permanently missing` : ''}${result.temporarily_unavailable_files ? ` · ${result.temporarily_unavailable_files} temporarily unavailable` : ''}${result.inaccessible_entries ? ` · ${result.inaccessible_entries} inaccessible locations` : ''}.`
+        : `${result.files_indexed} videos indexed${result.renamed_files ? ` · ${result.renamed_files} renamed files matched` : ''}${result.files_removed ? ` · ${result.files_removed} permanently missing` : ''}${result.temporarily_unavailable_files ? ` · ${result.temporarily_unavailable_files} temporarily unavailable` : ''}${result.inaccessible_entries ? ` · ${result.inaccessible_entries} inaccessible locations` : ''}${result.playlists_imported ? ` · ${result.playlists_imported} M3U/WPL playlist${result.playlists_imported === 1 ? '' : 's'} imported` : ''}.`
       debugLog('media-folders', 'index_complete', {
         directoryId: directory.id,
         filesIndexed: result.files_indexed,

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Windows Media Station",
+  "productName": "RollaPlay",
   "version": "0.1.0",
   "identifier": "app.windowsmediastation.local",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Windows Media Station",
+        "title": "RollaPlay",
         "width": 1360,
         "height": 900,
         "minWidth": 360,

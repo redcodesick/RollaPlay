@@ -1,4 +1,4 @@
-# Windows Media Station — Phase 4 Cast Testing Checklist
+# RollaPlay — Phase 4 Cast Testing Checklist
 
 **Status: discovery, live session and completion correlation fix implemented; playback/completion checklist still to run on hardware.** The workspace is Windows with Rust/Cargo, Node/pnpm and Chrome 157.0.8103.79. The packaged app discovered a Chromecast-enabled receiver named `Living Room TV` and reported `SESSION_STARTED` with that device after fixing the sender CSP (see [docs/windows-validation.md](docs/windows-validation.md)). This proves discovery and session establishment only; it does **not** prove media playback, receiving-side decoding, or `IdleReason.FINISHED` completion on hardware. The completion path was fixed after finding that a receiver assigns a new `mediaSessionId` to every load: the engine no longer keeps the previous item's ids, and the sender posts `idle_reason` on status events plus a proactive `FINISHED` check on the underlying Media object. Every playback item below must still be executed on real hardware before Phase 4 is considered done. Record **Pass / Fail / Blocked** with steps, expected/actual results, logs, and a screenshot where useful. A blocked test is not a pass. Do not mark any playback item complete from a code review or from this document.
 
@@ -39,12 +39,12 @@ These tests were executed in this packaged-app validation run: 60 passed, 0 fail
 ### Chrome sender
 
 - [ ] 1. Chrome detection: install Chrome system-wide (and repeat with a per-user install); Settings → Cast shows "Detected" with the correct path (registry then Program Files then per-user precedence). Uninstall Chrome → the panel shows "Chrome is not installed" and the cast button in the library shows the same guidance instead of a crash.
-- [ ] 2. Chrome launch: click **Launch sender**; Chrome runs in application mode on `http://127.0.0.1:<port>/` with no address bar or first-run dialog, and its window is embedded in the app's sender panel — no separate floating "Cast Sender" window. The panel stays open until a receiver is selected, then hides itself while the Cast session and app playback controls remain active.
+- [ ] 2. Chrome launch: click **Connect** in the player bar; the RollaPlay Connect overlay opens first and Chrome runs in application mode on `http://127.0.0.1:<port>/` with no address bar or first-run dialog. Its window is embedded in the overlay's Cast dialog area — no separate floating sender window, no internal playback or window controls. The overlay stays open until a receiver is selected, then hides itself while the Cast session and app playback controls remain active.
 - [ ] 3. Google Cast SDK initialization: the sender window shows "Official Cast sender SDK ready"; DevTools (if opened) shows `cast.framework` available. With the network disconnected it must show the "Cast framework could not load" error instead of hanging.
 
 ### Device discovery and session
 
-- [ ] 4. Device discovery: with the Mi Box idle on the same network, the sender's cast state flips from "No Cast devices found" to "Devices available — not connected" within ~10 s; the device picker (sender window button or automatic) lists the Mi Box by name. No fake devices appear when the Mi Box is powered off.
+- [ ] 4. Device discovery: with the receiver idle on the same LAN, Connect lists its real friendly name from `_googlecast._tcp.local.` mDNS within ~10 s and **REFRESH DEVICES** issues a new live query. No mock devices or hardcoded names appear when the receiver is powered off. If Chrome's own dialog lists a receiver that mDNS missed, it is still visible there; Connect does not invent an entry.
 - [ ] 5. Xiaomi Mi Box connection: select the Mi Box; the desktop UI pill changes to the device name, the session state becomes "Session active", and the Mi Box shows the Default Media Receiver backdrop. Disconnect from the Mi Box side (standby/power off) → the desktop UI shows the session ended state and the sender window clears the receiver name.
 - [ ] 6. Reconnect: after a disconnect, cast the same or another video; the sender re-attaches without restarting Chrome.
 
@@ -58,9 +58,9 @@ These tests were executed in this packaged-app validation run: 60 passed, 0 fail
 
 ### Playback controls
 
-- [ ] 12. Pause / resume: pause from the desktop UI and from the sender window; the Mi Box pauses; resume works from both; the desktop progress bar follows the receiver (event-driven, no timers).
-- [ ] 13. Seek: drag the desktop seek slider and the sender window slider; the receiver jumps to the position; position/duration labels stay consistent with the receiver.
-- [ ] 14. Volume / mute: change the new desktop player-bar volume slider and mute toggle; the Mi Box volume changes audibly; the sender window slider follows receiver events; volume changes made with the Mi Box remote appear in the desktop UI.
+- [ ] 12. Pause / resume: pause from the desktop UI; the receiver pauses and the desktop progress bar follows the receiver (event-driven, no timers). The embedded sender has no playback controls.
+- [ ] 13. Seek: drag the Cast panel seek slider; the receiver jumps to the position; position/duration labels stay consistent with the receiver. The embedded sender has no seek control.
+- [ ] 14. Volume / mute: change the desktop player-bar volume slider and mute toggle; the receiver volume changes audibly; volume changes made with the receiver remote appear in the desktop UI. The embedded sender has no volume controls.
 - [ ] 15. Stop: press Stop; the Mi Box leaves the video, the streaming grant is revoked, and streaming diagnostics show no lingering active stream for that media id.
 - [ ] 16. Disconnect: press Disconnect in the desktop UI; the Mi Box returns to the receiver backdrop; the library, the "last cast media" reference, and the progress are retained.
 
@@ -69,7 +69,7 @@ These tests were executed in this packaged-app validation run: 60 passed, 0 fail
 - [ ] 17. Receiver disconnected mid-playback: unplug the Mi Box or leave the session; the desktop UI keeps the playlist/library state and shows the failure honestly; the sender window reports the session ended; a subsequent cast works.
 - [ ] 18. Wi-Fi interruption: stream a long file and drop Wi-Fi on the tablet or the Mi Box for ~20 s; playback stalls and then fails or resumes without the app losing state; diagnostics record the interrupted stream; after the network returns, casting works again (the media server rebinds on adapter change as validated in Phase 3).
 - [ ] 19. Chrome crash / sender recovery: kill `chrome.exe` from Task Manager during playback; within the disconnect grace window the app relaunches the sender automatically (up to three attempts) while a Cast session was active; the Cast panel shows the recovery attempt counter. With the panel intentionally hidden, the watcher must **not** resurrect a floating window; casting again must reopen the sender inside the app and resume the session without asking for the device again. Close the sender window manually with nothing playing → no relaunch, status "closed".
-- [ ] 20. Application restart while casting: close the Windows app during playback; the Mi Box eventually drops the session; reopen the app — the Cast panel restores "last cast media" from `playback_state` and the library/playlist data are intact.
+- [ ] 20. Application restart while casting: close the Windows app during playback; the app sends stop and disconnect before tearing down the sender, so the Mi Box leaves the video immediately (no End Task needed); reopen the app — the Cast panel restores "last cast media" from `playback_state` and the library/playlist data are intact.
 - [ ] 21. Sender page crash (renderer): close the sender window but keep Chrome running, then cast; the app relaunches the sender page and playback proceeds.
 
 ### Security review while testing
@@ -85,5 +85,5 @@ These tests were executed in this packaged-app validation run: 60 passed, 0 fail
 ## Known limitations to document when testing
 
 - The Default Media Receiver plays MP4/M4V/WebM/MKV containers; codec support depends on the Mi Box hardware (H.264/VP9 + AAC are safe). AVI/WMV/MPEG-PS are rejected before casting.
-- Device enumeration inside the app's own list is intentionally not implemented: the official Cast Web Sender SDK does not expose a public "list receivers" API; discovery uses the framework's cast state plus Chrome's native device picker, which lists all discovered receivers by name.
+- Connect lists real receivers from LAN mDNS, but the official Web Sender SDK has no supported API to select a receiver by id. Choosing a device opens Chrome's Cast dialog with the name shown as guidance; the actual connection is still made by that dialog, and no success is reported until a real session event arrives.
 - Cast discovery requires mDNS to be permitted between the PC and the Mi Box (AP isolation must be off).
