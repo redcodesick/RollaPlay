@@ -13,11 +13,12 @@ import QueuePanel from './components/QueuePanel'
 import { FolderList, useMediaFolders } from './components/LibraryFolders'
 import MediaPicker from './components/MediaPicker'
 import PlaylistManager from './components/PlaylistManager'
+import PlayerBar from './components/PlayerBar'
 import { CastCheck, ChromeCheck, NetworkCheck } from './components/SetupChecks'
 import {
   castDeviceName, castSendControl, clickCastSender, embedCastSender, formatSeconds,
   getCastPlaybackState, hideCastSender, isCastAvailable, launchCastSender, onCastPlaybackEvent,
-  playerStateLabel, showCastSender, type SenderHostRect,
+  showCastSender, type SenderHostRect,
 } from './cast'
 import {
   clearWatchHistory, formatDuration, getPlaybackState, isPlaylistAvailable, listPlaylists,
@@ -27,11 +28,12 @@ import {
 import { formatBytes, getLocalStatus, getMediaDirectories, getMediaFiles, isDesktopApp, type MediaFile } from './media'
 import { debugLog } from './diagnostics'
 import {
-  Aperture, AlertCircle, Cast, Check, ChevronDown, ChevronsLeft, ChevronsRight, CircleHelp,
+  AlertCircle, Cast, Check, ChevronDown, ChevronsLeft, ChevronsRight, CircleHelp,
   Clapperboard, Clock3, Download, Film, FolderPlus, Gauge, HardDrive, History, House, Info, Library,
-  ListMusic, MoreHorizontal, Pause, Play, Plus, Search, Settings2, ShieldCheck,
-  SkipBack, SkipForward, SlidersHorizontal, Sparkles, Trash2, Volume2, VolumeX, Wifi, X,
+  ListMusic, Play, Plus, Search, Settings2, ShieldCheck,
+  Sparkles, Trash2, Wifi, X,
 } from 'lucide-react'
+import { BrandMark, NoticeIcon } from './ui'
 
 type View = 'Home' | 'Library' | 'Playlists' | 'Downloader' | 'Recently added' | 'History' | 'Settings'
 type Notice = (message: string, level?: Phase5Notification['level']) => void
@@ -40,9 +42,9 @@ const navItems: { label: View; icon: typeof House }[] = [
   { label: 'Home', icon: House },
   { label: 'Library', icon: Library },
   { label: 'Playlists', icon: ListMusic },
-  { label: 'Downloader', icon: Download },
   { label: 'Recently added', icon: Clock3 },
   { label: 'History', icon: History },
+  { label: 'Downloader', icon: Download },
 ]
 
 function Sidebar({
@@ -59,7 +61,7 @@ function Sidebar({
   return (
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
       <a className="brand" href="#home" aria-label="RollaPlay home" title="RollaPlay home" onClick={(event) => { event.preventDefault(); onNavigate('Home') }}>
-        <span className="brand-mark"><Aperture size={19} strokeWidth={2.4} /></span>
+        <BrandMark size={38} />
         <span className="brand-name"><b>ROLLA</b>PLAY<span>ROCKNROLLA MEDIA STATION</span></span>
       </a>
       <div className="nav-label">YOUR SPACE</div>
@@ -83,7 +85,7 @@ function Sidebar({
       <button className="sidebar-collapse" onClick={onToggle} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!collapsed}>
         {collapsed ? <ChevronsRight size={18} /> : <><ChevronsLeft size={18} /><span>Collapse</span></>}
       </button>
-      <div className="profile-row"><div className="profile-avatar">M</div><div><strong>RockNRolla Station</strong><span>Local device</span></div><MoreHorizontal size={18} /></div>
+      <div className="profile-row"><span className="profile-avatar"><BrandMark size={20} /></span><div><strong>RollaPlay Station</strong><span>Local device</span></div></div>
     </aside>
   )
 }
@@ -121,46 +123,41 @@ function RecentGrid({ files, limit = 6, onPlay }: { files: MediaFile[]; limit?: 
 }
 
 function HomeSpotlight({
-  playlists, recentFiles, onPlayPlaylist, onPlayMedia, onBrowse, onOpenPlaylists,
+  playlists, recentFiles, onPlayPlaylist, onPlayMedia, onOpenLibrary, onOpenDownloader,
 }: {
   playlists: PlaylistSummary[] | undefined
   recentFiles: MediaFile[] | undefined
   onPlayPlaylist: (id: number) => void
   onPlayMedia: (id: number) => void
-  onBrowse: () => void
-  onOpenPlaylists: () => void
+  onOpenLibrary: () => void
+  onOpenDownloader: () => void
 }) {
   const playlist = playlists?.[0]
   const latest = recentFiles?.[0]
-  const title = playlist?.name ?? latest?.filename ?? 'Your library. Ready when you are.'
+  const continueTitle = playlist?.name ?? latest?.filename ?? null
   const detail = playlist
-    ? `${playlist.item_count} video${playlist.item_count === 1 ? '' : 's'} · ${formatDuration(playlist.duration_seconds)} · set up for your TV.`
+    ? `${playlist.item_count} video${playlist.item_count === 1 ? '' : 's'} · ${formatDuration(playlist.duration_seconds)} · ready for your TV.`
     : latest
       ? `${formatBytes(latest.size_bytes)} · the newest addition to your collection.`
       : 'Add a folder with your local videos and RollaPlay will index it here.'
-  const play = () => {
+  const continuePlaying = () => {
     if (playlist) onPlayPlaylist(playlist.id)
     else if (latest) onPlayMedia(latest.id)
-    else onBrowse()
   }
-  const action = playlist ? 'Play playlist' : latest ? 'Play latest add' : 'Add media folder'
   return (
     <section className="featured-card">
       <img src="/media/featured-still.png" alt="" />
       <div className="feature-overlay" />
       <div className="feature-content">
-        <div className="feature-tag"><span /> {playlist ? 'PLAYLIST OF THE MOMENT' : latest ? 'FRESH IN YOUR LIBRARY' : 'YOUR MEDIA SPACE'}</div>
-        <h2 title={title}>{title}</h2>
+        <div className="feature-tag"><span /> YOUR MUSIC. YOUR RULES.</div>
+        <h2>YOUR MUSIC.<br />YOUR RULES.</h2>
         <p>{detail}</p>
         <div className="feature-actions">
-          <button className="feature-button" onClick={play}>
-            {playlist || latest ? <Play size={17} /> : <FolderPlus size={17} />} {action} <span>→</span>
-          </button>
-          {playlist && <button className="feature-secondary" onClick={onOpenPlaylists}>All playlists</button>}
+          <button className="feature-button" onClick={onOpenLibrary}><Library size={17} /> Browse Library <span>→</span></button>
+          <button className="feature-secondary" onClick={onOpenDownloader}><Download size={16} /> Open Downloader</button>
+          {continueTitle && <button className="feature-secondary" onClick={continuePlaying}><Play size={15} /> Continue playing · {continueTitle}</button>}
         </div>
       </div>
-      <div className="feature-side-note"><span>{String(playlists?.length ?? 0).padStart(2, '0')}</span><i /> PLAYLISTS SAVED</div>
-      <div className="feature-pagination"><span className="selected" /><span /><span /></div>
     </section>
   )
 }
@@ -213,12 +210,13 @@ type SetupDialogProps = {
 function SetupDialog({
   step, setStep, onClose, onOpenLibrary, onNotice, selectedMediaIds, onSelectionChange, snapshot,
 }: SetupDialogProps) {
-  const steps = ['Welcome', 'Media folders', 'Playlists', 'Google Chrome', 'Network', 'Cast devices', 'All set']
+  const steps = ['Welcome', 'Media folders', 'Scan', 'Cast devices', 'All set']
   const isDesktop = isDesktopApp()
   const folders = useMediaFolders()
   const [skippedFolders, setSkippedFolders] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const lastStep = steps.length - 1
-  const optionalSteps = new Set([2, 3, 4, 5])
+  const optionalSteps = new Set([2, 3])
 
   useEffect(() => {
     debugLog('wizard', 'step_change', { step, label: steps[step] })
@@ -253,7 +251,7 @@ function SetupDialog({
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { click('close_backdrop'); onClose() } }}>
       <section className={`setup-dialog ${step > 0 && step < lastStep ? 'setup-dialog-wide' : ''}`} role="dialog" aria-modal="true" aria-labelledby="setup-title">
         <button className="dialog-close" onClick={() => { click('close'); onClose() }} aria-label="Close setup">×</button>
-        <div className="setup-eyebrow"><Sparkles size={15} /> FIRST-RUN SETUP <span>STEP {step + 1} OF {steps.length}</span></div>
+        <div className="setup-eyebrow"><Sparkles size={15} /> FIRST-RUN SETUP <span className="setup-step-count">STEP {step + 1} OF {steps.length}</span></div>
         <div className="step-progress">{steps.map((item, index) => <span key={item} className={index <= step ? 'complete' : ''} />)}</div>
 
         {step === 0 && <>
@@ -289,34 +287,31 @@ function SetupDialog({
         </>}
 
         {step === 2 && <>
-          <div className="setup-icon"><ListMusic size={25} /></div>
-          <h2 id="setup-title">Make it yours<br /><em>with playlists.</em></h2>
-          <p>Select indexed videos, then create a playlist or choose an existing one. This step is optional; existing playlists and selections are stored in SQLite.</p>
-          <MediaPicker selectedMediaIds={selectedMediaIds} onSelectionChange={onSelectionChange} />
-          <PlaylistManager
-            snapshot={snapshot}
-            selectedMediaIds={selectedMediaIds}
-            onNotice={onNotice}
-            onSelectionConsumed={() => onSelectionChange([])}
-            compact
+          <div className="setup-icon"><HardDrive size={25} /></div>
+          <h2 id="setup-title">Scan your<br /><em>library.</em></h2>
+          <p>RollaPlay indexes selected folders in the background and generates local previews. Nothing is uploaded.</p>
+          <FolderList
+            directories={folders.directories}
+            isLoading={folders.isLoadingDirectories}
+            scanProgress={folders.scanProgress}
+            onScan={(directory) => void folders.scanDirectory(directory)}
+            onCancel={(directory) => void folders.cancelScan(directory)}
+            onRemove={(directory) => void folders.removeFolder(directory)}
+            onAdd={() => void folders.addFolders()}
+            addDisabled={!isDesktop || folders.isAdding}
           />
+          <button className="button-text wizard-advanced-toggle" onClick={() => { click('toggle_advanced'); setShowAdvanced(!showAdvanced) }} aria-expanded={showAdvanced}>
+            {showAdvanced ? 'Hide optional checks' : 'Show optional checks'} <span>→</span>
+          </button>
+          {showAdvanced && <div className="wizard-advanced">
+            <div className="setup-note"><ShieldCheck size={17} /><span>These checks are optional. You can return to them any time from the Setup guide.</span></div>
+            <div className="wizard-advanced-block"><div className="download-label">Playlists</div><MediaPicker selectedMediaIds={selectedMediaIds} onSelectionChange={onSelectionChange} /><PlaylistManager snapshot={snapshot} selectedMediaIds={selectedMediaIds} onNotice={onNotice} onSelectionConsumed={() => onSelectionChange([])} compact /></div>
+            <div className="wizard-advanced-block"><div className="download-label">Google Chrome</div><ChromeCheck onNotice={onNotice} /></div>
+            <div className="wizard-advanced-block"><div className="download-label">Local network</div><NetworkCheck onNotice={onNotice} /></div>
+          </div>}
         </>}
 
         {step === 3 && <>
-          <div className="setup-icon"><Film size={25} /></div>
-          <h2 id="setup-title">Check<br /><em>Google Chrome.</em></h2>
-          <p>The official Google Cast Web Sender SDK runs hidden in the background using the installed Chrome browser. This step checks the browser and can start the sender.</p>
-          <ChromeCheck onNotice={onNotice} />
-        </>}
-
-        {step === 4 && <>
-          <div className="setup-icon"><Wifi size={25} /></div>
-          <h2 id="setup-title">Check your<br /><em>local network.</em></h2>
-          <p>Streaming binds to a private LAN IPv4 address. These checks read the active interface and server state from the desktop app.</p>
-          <NetworkCheck onNotice={onNotice} />
-        </>}
-
-        {step === 5 && <>
           <div className="setup-icon"><Cast size={25} /></div>
           <h2 id="setup-title">Find your<br /><em>Cast device.</em></h2>
           <p>Real receiver discovery requires Chrome and a Cast device on the same LAN. Starting discovery opens the managed sender panel in this window.</p>
@@ -368,9 +363,9 @@ function AboutDialog({
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
       <section className="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title">
         <button className="dialog-close" onClick={onClose} aria-label="Close about">×</button>
-        <div className="setup-eyebrow"><Aperture size={15} /> ABOUT THIS APP</div>
+        <div className="setup-eyebrow"><BrandMark size={16} /> ABOUT THIS APP</div>
         <div className="about-brand">
-          <span className="about-mark"><Aperture size={28} /></span>
+          <span className="about-mark"><BrandMark size={38} title /></span>
           <div><h2 id="about-title">{info.name}</h2><p>Local media, loud attitude.</p></div>
         </div>
         <p className="about-lede">RollaPlay keeps your video library on this PC and streams original files straight to your TV. No account, no uploads, no subscriptions.</p>
@@ -405,7 +400,14 @@ function ExitConfirmDialog({ onCancel, onConfirm }: { onCancel: () => void; onCo
   )
 }
 
-function SettingsView({ onManage, onPlayback }: { onManage: () => void; onPlayback: () => void }) {
+function SettingsView({
+  onManage, onPlayback, onDownloader, onAbout,
+}: {
+  onManage: () => void
+  onPlayback: () => void
+  onDownloader: () => void
+  onAbout: () => void
+}) {
   const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   return (
     <section className="settings-view">
@@ -413,29 +415,39 @@ function SettingsView({ onManage, onPlayback }: { onManage: () => void; onPlayba
       <h1>Settings</h1>
       <p className="settings-lede">Configure how RollaPlay works on this device.</p>
       <div className="settings-grid">
-        <article className="settings-card">
+        <article className="settings-card" id="settings-general">
+          <div className="settings-card-icon"><Info size={19} /></div>
+          <div><h3>General</h3><p>Setup guide and information about this app.</p></div>
+          <button className="settings-action" onClick={onAbout}>About <span>→</span></button>
+        </article>
+        <article className="settings-card" id="settings-library">
           <div className="settings-card-icon"><FolderPlus size={19} /></div>
-          <div><h3>Media folders</h3><p>Choose which folders are included in your library.</p></div>
+          <div><h3>Media library</h3><p>Choose which folders are included in your library.</p></div>
           <button className="settings-action" onClick={onManage}>Manage <span>→</span></button>
         </article>
-        <article className="settings-card">
-          <div className="settings-card-icon"><Wifi size={19} /></div>
-          <div><h3>Local network</h3><p>LAN streaming and connectivity diagnostics.</p></div>
-          <button className="settings-action" onClick={() => scrollTo('settings-network')}>Open <span>→</span></button>
-        </article>
-        <article className="settings-card">
-          <div className="settings-card-icon"><Cast size={19} /></div>
-          <div><h3>Cast connection</h3><p>Official Google Cast sender via Google Chrome.</p></div>
-          <button className="settings-action" onClick={() => scrollTo('settings-cast')}>Open <span>→</span></button>
-        </article>
-        <article className="settings-card">
+        <article className="settings-card" id="settings-playback">
           <div className="settings-card-icon"><Gauge size={19} /></div>
-          <div><h3>Playback behavior</h3><p>Autoplay, repeat, and shuffle preferences.</p></div>
+          <div><h3>Playback</h3><p>Autoplay, repeat, and shuffle preferences.</p></div>
           <button className="settings-action" onClick={onPlayback}>Configure <span>→</span></button>
+        </article>
+        <article className="settings-card" id="settings-downloader">
+          <div className="settings-card-icon"><Download size={19} /></div>
+          <div><h3>Downloader</h3><p>Public YouTube links, tool status, and saved MP4 files.</p></div>
+          <button className="settings-action" onClick={onDownloader}>Open <span>→</span></button>
+        </article>
+        <article className="settings-card" id="settings-network">
+          <div className="settings-card-icon"><Wifi size={19} /></div>
+          <div><h3>Network and Cast</h3><p>LAN streaming, receiver discovery, and sender diagnostics.</p></div>
+          <button className="settings-action" onClick={() => scrollTo('settings-network-panel')}>Open <span>→</span></button>
+        </article>
+        <article className="settings-card" id="settings-diagnostics">
+          <div className="settings-card-icon"><ShieldCheck size={19} /></div>
+          <div><h3>Diagnostics</h3><p>Redacted local checks and streaming diagnostics.</p></div>
+          <button className="settings-action" onClick={() => scrollTo('settings-cast')}>Review <span>→</span></button>
         </article>
       </div>
       <div className="privacy-banner"><ShieldCheck size={19} /><div><strong>Your privacy matters</strong><p>Media metadata and playlists are stored locally on this PC. No cloud account required.</p></div></div>
-      <div id="settings-network"><MediaServerSettings /></div>
+      <div id="settings-network-panel"><MediaServerSettings /></div>
       <div id="settings-cast"><CastPanel /></div>
     </section>
   )
@@ -662,9 +674,10 @@ function App() {
     }
   }, [castPlayback?.volume_level, volumePreview])
   const pageTitle = useMemo(() => active === 'Home' ? 'Good evening' : active, [active])
+  const closeSetup = () => { completeSetup(); setSetupOpen(false) }
   const openSetup = () => { setSetupStep(0); setSetupOpen(true) }
   const browse = () => { setSetupStep(1); setSetupOpen(true) }
-  const openNetworkSetup = () => { setSetupStep(4); setSetupOpen(true) }
+  const openNetworkSetup = () => { setSetupStep(2); setSetupOpen(true) }
   const senderRect = useCallback((): SenderHostRect => {
     const element = senderHostRef.current
     if (!element) return { x: 24, y: 24, width: 380, height: 260 }
@@ -766,8 +779,7 @@ function App() {
         <header className="topbar">
           <div className="breadcrumb"><span>MY MEDIA</span><span className="crumb-slash">/</span><strong>{active.toUpperCase()}</strong></div>
           <div className="topbar-actions">
-            <label className="search-box"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search your library" aria-label="Search your library" /><kbd>⌘ K</kbd></label>
-            <button className="icon-button" aria-label="Sort library"><SlidersHorizontal size={19} /></button>
+            {(active === 'Library' || active === 'Recently added') && <label className="search-box"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search indexed videos" aria-label="Search indexed videos" /></label>}
             <div className="cast-menu">
               <button className={`device-pill ${castConnected ? 'connected' : ''}`} onClick={() => void openConnect()} aria-label={`Cast status: ${castDevice ?? 'no device connected'}. Open Connect.`}><span className="status-dot" /><Cast size={17} /><span>{castDevice ?? 'No device'}</span><ChevronDown size={14} /></button>
               {/* The official Web Sender SDK lives here, fully transparent. */}
@@ -781,7 +793,7 @@ function App() {
             </div>
           </div>
         </header>
-        {active === 'Settings' ? <SettingsView onManage={browse} onPlayback={() => setActive('Playlists')} />
+        {active === 'Settings' ? <SettingsView onManage={browse} onPlayback={() => setActive('Playlists')} onDownloader={() => setActive('Downloader')} onAbout={() => setAboutOpen(true)} />
           : active === 'Downloader' ? <Downloader />
           : active === 'Library' ? <MediaLibrary searchQuery={query} selectedMediaIds={selectedMediaIds} onSelectionChange={setSelectedMediaIds} />
           : active === 'Playlists' ? <section className="section-page queue-page"><div className="section-eyebrow">YOUR COLLECTION</div><h1>Playlists &amp; queue</h1><p>Saved playlists first, then the active playback queue and receiver-driven playback controls.</p><QueuePanel snapshot={phase5Snapshot ?? null} castConnected={castConnected} selectedMediaIds={selectedMediaIds} onNotice={showNotice} onSelectionConsumed={() => setSelectedMediaIds([])} onTogglePlay={toggleCastPlay} isPlaying={castState === 'PLAYING'} onHistoryCleared={() => void mutatePhase5()} /></section>
@@ -813,10 +825,9 @@ function App() {
             recentFiles={recentFiles}
             onPlayPlaylist={playSelectedPlaylist}
             onPlayMedia={playSelectedMedia}
-            onBrowse={browse}
-            onOpenPlaylists={() => setActive('Playlists')}
+            onOpenLibrary={() => setActive('Library')}
+            onOpenDownloader={() => setActive('Downloader')}
           />
-          <HomePlaylistShelf playlists={playlists} onPlay={playSelectedPlaylist} onOpenAll={() => setActive('Playlists')} />
           <div className="library-summary"><div className="summary-title"><div><div className="section-eyebrow">YOUR COLLECTION</div><h2>Recently added</h2></div><button className="text-link" onClick={() => setActive('Recently added')}>View all <span>→</span></button></div>
              {recentFiles && recentFiles.length > 0
                ? <RecentGrid files={recentFiles} onPlay={playSelectedMedia} />
@@ -826,29 +837,43 @@ function App() {
             <div className="content-heading first-steps-heading"><div><div className="section-eyebrow">START HERE</div><h2>Make it yours</h2></div><button className="text-link" onClick={openSetup}>Setup guide <span>→</span></button></div>
             <div className="quick-cards"><button className="quick-card" onClick={browse}><span className="quick-card-icon purple"><FolderPlus size={19} /></span><span className="quick-card-copy"><strong>Add your folders</strong><small>Build your local library</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={() => void openConnect()}><span className="quick-card-icon blue"><Cast size={19} /></span><span className="quick-card-copy"><strong>Connect your TV</strong><small>{castDevice ? `Casting to ${castDevice}` : 'Choose a device'}</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={openNetworkSetup}><span className="quick-card-icon amber"><HardDrive size={19} /></span><span className="quick-card-copy"><strong>Check your setup</strong><small>Network and preferences</small></span><span className="card-arrow">↗</span></button></div>
           </>}
+          <HomePlaylistShelf playlists={playlists} onPlay={playSelectedPlaylist} onOpenAll={() => setActive('Playlists')} />
         </>}
         <footer className="app-footer"><span>ROLLAPLAY <b>•</b> LOCAL MEDIA. LOUD ATTITUDE.</span><span><ShieldCheck size={13} /> LOCAL FIRST</span></footer>
       </main>
-      {notice && <div className={`phase5-toast toast-${notice.level}`} role="status"><Check size={15} /><span>{notice.message}</span><button onClick={() => setNotice(null)} aria-label="Dismiss notification"><X size={14} /></button></div>}
-      <div className="player-bar"><div className="player-track"><div className={`player-art ${castConnected && castHasMedia ? 'casting' : ''}`}><Cast size={17} /></div><div className="player-meta"><strong>{castTitle ?? 'Nothing is playing'}</strong><span>{castConnected && castHasMedia ? `${playerStateLabel(castState)} on ${castDevice}` : 'Pick a video and cast it to your TV'}</span></div></div><div className="player-controls"><button disabled={!playlistReady || !phase5Snapshot?.current_entry_id} onClick={queuePrevious} aria-label="Previous video" title={phase5Snapshot ? `Previous · restarts after ${phase5Snapshot.previous_restart_threshold_seconds}s; with Shuffle follows history` : 'Previous'}><SkipBack size={17} /></button><button className="player-play" disabled={!castReady || !castConnected || !castHasMedia} onClick={toggleCastPlay} aria-label={isPlaying ? 'Pause' : 'Play'}>{isPlaying ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}</button><button disabled={!playlistReady || !phase5Snapshot?.current_entry_id} onClick={queueNext} aria-label="Next video" title="Next video"><SkipForward size={17} /></button></div><div className="player-progress"><span>{formatSeconds(displayedPosition)}</span><div className="progress-track"><i style={{ width: `${progressPercent}%` }} /><b className="seek-thumb" style={{ left: `${progressPercent}%` }} /><input className="seek-range" type="range" min={0} max={Math.max(1, Math.ceil(castDuration))} step={1} aria-label="Seek playback" disabled={!castReady || !castConnected || !castHasMedia || castDuration <= 0} value={Math.round(Math.min(displayedPosition, castDuration || 0))} onChange={(event) => setSeekPreview(Number(event.target.value))} onPointerUp={commitSeek} onKeyUp={commitSeek} onBlur={commitSeek} /></div><span>{formatSeconds(castDuration)}</span></div><div className="player-device"><Cast size={17} className={castConnected ? 'casting' : ''} /><span>{castDevice ?? 'No Cast device'}</span><div className="player-volume"><button
-  aria-label={castPlayback?.muted ? 'Unmute' : 'Mute'}
-  disabled={!castReady || !castConnected}
-  onClick={() => void castSendControl('set_mute', { muted: !castPlayback?.muted }).catch((error) => showNotice(String(error), 'error'))}
->{castPlayback?.muted ? <VolumeX size={15} /> : <Volume2 size={15} />}</button><input
-  type="range" min={0} max={1} step={0.01}
-  aria-label="Receiver volume"
-  disabled={!castReady || !castConnected}
-  value={volumePreview ?? castPlayback?.volume_level ?? 1}
-  onChange={(event) => {
-    const value = Number(event.target.value)
-    setVolumePreview(value)
-    void castSendControl('set_volume', { volume: value }).catch((error) => showNotice(String(error), 'error'))
-  }}
-/></div></div><div className="player-disclaimer"><span /> {castConnected && castHasMedia ? 'PLAYBACK CONTROLLED THROUGH GOOGLE CAST' : 'PLAYER READY WHEN CAST IS CONNECTED'}</div></div>
+      {notice && <div className={`phase5-toast toast-${notice.level}`} role="status"><NoticeIcon level={notice.level} /><span>{notice.message}</span><button onClick={() => setNotice(null)} aria-label="Dismiss notification"><X size={14} /></button></div>}
+      <PlayerBar
+        castReady={castReady}
+        playlistReady={playlistReady}
+        castConnected={castConnected}
+        castHasMedia={castHasMedia}
+        isPlaying={isPlaying}
+        castTitle={castTitle}
+        castDevice={castDevice}
+        castState={castState}
+        displayedPosition={displayedPosition}
+        castDuration={castDuration}
+        progressPercent={progressPercent}
+        previousTitle={phase5Snapshot ? `Previous · restarts after ${phase5Snapshot.previous_restart_threshold_seconds}s; with Shuffle follows history` : 'Previous'}
+        queueAvailable={!!phase5Snapshot?.current_entry_id}
+        muted={!!castPlayback?.muted}
+        volume={volumePreview ?? castPlayback?.volume_level ?? 1}
+        onPrevious={queuePrevious}
+        onNext={queueNext}
+        onTogglePlay={toggleCastPlay}
+        onSeekPreview={setSeekPreview}
+        onCommitSeek={commitSeek}
+        onOpenConnect={() => void openConnect()}
+        onMute={() => void castSendControl('set_mute', { muted: !castPlayback?.muted }).catch((error) => showNotice(String(error), 'error'))}
+        onVolume={(value) => {
+          setVolumePreview(value)
+          void castSendControl('set_volume', { volume: value }).catch((error) => showNotice(String(error), 'error'))
+        }}
+      />
       {setupOpen && <SetupDialog
         step={setupStep}
         setStep={setSetupStep}
-        onClose={() => setSetupOpen(false)}
+        onClose={closeSetup}
         onOpenLibrary={() => {
           completeSetup()
           setActive('Library')
@@ -867,7 +892,6 @@ function App() {
         playlistCount={playlists?.length ?? 0}
       />}
       {exitConfirmOpen && <ExitConfirmDialog onCancel={() => setExitConfirmOpen(false)} onConfirm={() => void confirmExit()} />}
-      {query && active !== 'Library' && <div className="search-feedback" role="status">Open Media library to search your indexed videos.</div>}
     </div>
   )
 }

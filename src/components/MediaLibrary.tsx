@@ -3,7 +3,7 @@ import useSWR, { useSWRConfig } from 'swr'
 import { listen } from '@tauri-apps/api/event'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import {
-  AlertCircle, Cast, Check, Film, FolderPlus, HardDrive, ListMusic, LoaderCircle,
+  AlertCircle, Cast, Check, Film, FolderPlus, HardDrive, LayoutGrid, List, ListMusic, LoaderCircle,
   Play, RefreshCw, ShieldCheck, X,
 } from 'lucide-react'
 import {
@@ -89,8 +89,7 @@ function MediaCard({
           aria-label={`Cast ${media.filename}`}
           title={castTitle}
         >
-          <Cast size={16} />
-          <span>Cast</span>
+          <Cast size={15} />
         </button>
       </div>
       <div className="media-card-info">
@@ -112,6 +111,7 @@ export default function MediaLibrary({
 }) {
   const [extension, setExtension] = useState('')
   const [sortBy, setSortBy] = useState<SortBy>('name')
+  const [view, setView] = useState<'grid' | 'list'>('grid')
   const [folderFilter, setFolderFilter] = useState('')
   const [playlistName, setPlaylistName] = useState('')
   const [savingPlaylist, setSavingPlaylist] = useState(false)
@@ -334,7 +334,7 @@ export default function MediaLibrary({
       </section>
 
       <section className="video-library-section" aria-labelledby="videos-title">
-        <div className="video-library-heading"><div><h2 id="videos-title">All videos</h2><p>{search ? `Search results for “${search}”` : 'Your indexed video collection'}</p></div><div className="library-sort"><label htmlFor="extension-filter">Format</label><select id="extension-filter" value={extension} onChange={(event) => setExtension(event.target.value)}><option value="">All formats</option>{extensions.map((item) => <option key={item} value={item}>{item.toUpperCase()}</option>)}</select><label htmlFor="sort-order">Sort</label><select id="sort-order" value={sortBy} onChange={(event) => setSortBy(event.target.value as SortBy)}><option value="name">Name</option><option value="date">Date added</option><option value="size">File size</option></select></div></div>
+        <div className="video-library-heading"><div><h2 id="videos-title">All videos</h2><p>{search ? `Search results for “${search}”` : 'Your indexed video collection'}</p></div><div className="library-toolbar"><div className="library-sort"><label htmlFor="extension-filter">Format</label><select id="extension-filter" value={extension} onChange={(event) => setExtension(event.target.value)}><option value="">All formats</option>{extensions.map((item) => <option key={item} value={item}>{item.toUpperCase()}</option>)}</select><label htmlFor="sort-order">Sort</label><select id="sort-order" value={sortBy} onChange={(event) => setSortBy(event.target.value as SortBy)}><option value="name">Name</option><option value="date">Date added</option><option value="size">File size</option></select></div><div className="library-view-toggle" role="group" aria-label="Library layout"><button className={view === 'grid' ? 'active' : ''} onClick={() => setView('grid')} title="Grid view" aria-label="Grid view"><LayoutGrid size={16} /></button><button className={view === 'list' ? 'active' : ''} onClick={() => setView('list')} title="List view" aria-label="List view"><List size={16} /></button></div></div></div>
         <div className="library-selection-bar" role="status">
           <span>{selectedMediaIds.length ? `${selectedMediaIds.length} selected` : 'Select videos using the checkbox on each card, or select a whole folder'}</span>
           <select className="selection-folder" value={folderFilter} onChange={(event) => setFolderFilter(event.target.value)} aria-label="Limit selection to one folder" disabled={!folderOptions.length}>
@@ -352,7 +352,7 @@ export default function MediaLibrary({
           <span className="selection-hint">Playlists are stored locally; you can rename and play them in the Playlists panel.</span>
           {selectedMediaIds.length > 0 && <button className="selection-clear" onClick={() => onSelectionChange([])}><X size={14} /> Clear</button>}
         </div>
-        {filesError ? <div className="library-empty-results"><AlertCircle size={20} /><strong>Could not load the library</strong><span>Try reopening the application. Your indexed files are stored on this device.</span></div> : isLoadingFiles ? <div className="library-loading"><LoaderCircle size={17} className="spin-icon" /> Loading videos…</div> : files.length ? <div className="media-grid">{files.map((media) => <MediaCard key={media.id} media={media} onRefresh={refreshThumbnail} onCast={castVideo} castReady={castReady} isCasting={castingMediaId === media.id} selected={selectedMediaIds.includes(media.id)} onToggleSelect={toggleSelect} />)}</div> : <div className="library-empty-results"><span className="empty-results-icon"><HardDrive size={22} /></span><strong>{search || extension ? 'No matching videos' : 'Your video collection is empty'}</strong><span>{search || extension ? 'Try a different search or format filter.' : 'Add a folder and scan it to see your videos here.'}</span>{!folders.directories.length && <button className="button-primary" onClick={() => void folders.addFolders()} disabled={!isDesktop}><FolderPlus size={16} /> Add media folder</button>}</div>}
+        {filesError ? <div className="library-empty-results"><AlertCircle size={20} /><strong>Could not load the library</strong><span>Try reopening the application. Your indexed files are stored on this device.</span></div> : isLoadingFiles ? <div className="library-loading"><LoaderCircle size={17} className="spin-icon" /> Loading videos…</div> : files.length ? <div className={`media-grid ${view === 'list' ? 'list-view' : ''}`}>{files.map((media) => <MediaCard key={media.id} media={media} onRefresh={refreshThumbnail} onCast={castVideo} castReady={castReady} isCasting={castingMediaId === media.id} selected={selectedMediaIds.includes(media.id)} onToggleSelect={toggleSelect} />)}</div> : <div className="library-empty-results"><span className="empty-results-icon"><HardDrive size={22} /></span><strong>{search || extension ? 'No matching videos' : 'Your video collection is empty'}</strong><span>{search || extension ? 'Try a different search or format filter.' : 'Add a folder and scan it to see your videos here.'}</span>{!folders.directories.length && <button className="button-primary" onClick={() => void folders.addFolders()} disabled={!isDesktop}><FolderPlus size={16} /> Add media folder</button>}</div>}
       </section>
     </section>
   )

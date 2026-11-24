@@ -2,6 +2,27 @@
 
 All notable changes to RollaPlay are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-11-24
+
+### Changed
+
+- Full visual redesign with one tokenized dark palette, local Windows typography, a compact Rolla mark, and no runtime font services.
+- Refined shell, sidebar, top bar, persistent playback bar, Home, Library, Playlists, Queue, Cast Connect, Downloader, Settings, Setup, About, and empty/loading states.
+- Cast Connect now lists only real discovered receivers; the local-PC row is gone, the Library cast action is icon-only, and the receiver picker is a tighter dialog.
+- Setup and About dialogs no longer place step counters or branding under the close button.
+
+### Fixed
+
+- Playlist cover artwork now opens the playlist, and its play button is no longer blocked by the artwork overlay.
+- Playlist cover controls are keyboard reachable and expose clear accessible names.
+- Setup guide step counters and the About brand mark no longer overlap the X.
+- No backend commands, events, playback rules, Cast security model, SQLite behavior, or Downloader implementation changed.
+
+### Added
+
+- `docs/redesign-plan.md` with the pre-implementation audit and phase plan.
+- Real-app screenshots for Home, Library, Playlist, Connect, Downloader, Setup, and About in `docs/screenshots/`.
+
 ## [0.1.1] - 2026-11-24
 
 ### Added

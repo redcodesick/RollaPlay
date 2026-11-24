@@ -1,6 +1,6 @@
 [package]
 name = "rollaplay"
-version = "0.1.1"
+version = "0.2.0"
 description = "RollaPlay — local media, loud attitude"
 authors = ["RockNRolla"]
 edition = "2021"
