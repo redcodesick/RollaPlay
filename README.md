@@ -35,7 +35,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 pnpm tauri build         # app + NSIS and MSI installers
 ```
 
-Installers land in `src-tauri/target/release/bundle/nsis/RollaPlay_0.1.1_x64-setup.exe` and `src-tauri/target/release/bundle/msi/RollaPlay_0.1.1_x64_en-US.msi`. Generated folders (`node_modules`, `dist`, `src-tauri/target`, `src-tauri/gen`, `.backup`) are gitignored and never committed.
+Installers land in `src-tauri/target/release/bundle/nsis/RollaPlay_0.2.0_x64-setup.exe` and `src-tauri/target/release/bundle/msi/RollaPlay_0.2.0_x64_en-US.msi`. Generated folders (`node_modules`, `dist`, `src-tauri/target`, `src-tauri/gen`, `.backup`) are gitignored and never committed.
 
 App data (SQLite database, thumbnail cache, diagnostics log) lives under `%LOCALAPPDATA%\app.windowsmediastation.local`. Setup completion is tracked locally as `wms.setup.completed`, and the sidebar preference as `wms.sidebar.collapsed`.
 

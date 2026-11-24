@@ -4,13 +4,13 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import {
   AlertCircle, Check, Clock3, Disc3, Download, FolderPlus, GripVertical, LoaderCircle,
-  MoreHorizontal, Music2, Play, Plus, RefreshCw, SkipForward, Trash2, Upload, X,
+  MoreHorizontal, Music2, Play, Plus, RefreshCw, Shuffle, SkipForward, Trash2, Upload, X,
 } from 'lucide-react'
 import {
   addPlaylistItems, createPlaylist, deletePlaylist, exportPlaylistFile, formatDuration,
   getPlaybackState, importPlaylistFiles, isPlaylistAvailable, listPlaylistItems, listPlaylists,
   playMediaNow, playPlaylist, queueAdd, queueAddPlaylist, removePlaylistItem, renamePlaylist,
-  reorderPlaylistItem, selectPlaylist, type PlaybackSnapshot, type PlaylistFileFormat,
+  reorderPlaylistItem, selectPlaylist, setShuffle, type PlaybackSnapshot, type PlaylistFileFormat,
   type PlaylistItem, type PlaylistSummary,
 } from '../playlist'
 import { debugLog, friendlyError, invokeTracked } from '../diagnostics'
@@ -32,7 +32,7 @@ type Props = {
 
 /** Shared Phase 5 playlist CRUD UI used by the Playlists page and the wizard. */
 export default function PlaylistManager({
-  selectedMediaIds, onNotice, onSelectionConsumed, compact = false,
+  snapshot, selectedMediaIds, onNotice, onSelectionConsumed, compact = false,
 }: Props) {
   const available = isPlaylistAvailable()
   const { mutate: mutateGlobal } = useSWRConfig()
@@ -268,11 +268,24 @@ export default function PlaylistManager({
     const cover = covers[playlist.id]
     return (
       <article key={playlist.id} className={`playlist-card ${featured ? 'playlist-card-featured' : ''} ${selected ? 'selected' : ''}`}>
-        <div className={`playlist-cover tone-${coverTone(playlist.id)}`}>
+        <div
+          className={`playlist-cover tone-${coverTone(playlist.id)}`}
+          role="button"
+          tabIndex={0}
+          aria-label={`Open ${playlist.name}`}
+          title={`Open ${playlist.name}`}
+          onClick={() => openPlaylist(playlist)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              openPlaylist(playlist)
+            }
+          }}
+        >
           {cover ? <img src={cover} alt="" /> : <Disc3 size={featured ? 38 : 26} strokeWidth={1.4} />}
           <button
             className="playlist-cover-play"
-            onClick={() => playWholePlaylist(playlist)}
+            onClick={(event) => { event.stopPropagation(); playWholePlaylist(playlist) }}
             disabled={busy || !playlist.item_count || !available}
             title="Play whole playlist"
             aria-label={`Play ${playlist.name}`}
@@ -313,6 +326,9 @@ export default function PlaylistManager({
       </article>
     )
   }
+
+  const selectedPlaylistData = playlists.find((playlist) => playlist.id === selectedPlaylist)
+  const selectedCover = selectedPlaylist != null ? covers[selectedPlaylist] : null
 
   const folderButton = (label: string) => (
     <button
@@ -393,16 +409,28 @@ export default function PlaylistManager({
 
       {selectedPlaylist != null && <div className="playlist-detail">
         <div className="playlist-detail-head">
+          <div className={`playlist-detail-art tone-${coverTone(selectedPlaylist ?? 0)}`}>
+            {selectedCover ? <img src={selectedCover} alt="" /> : <Disc3 size={34} strokeWidth={1.4} />}
+          </div>
           <div className="playlist-detail-title">
             <span className="playlist-detail-kicker"><MoreHorizontal size={16} /> PLAYLIST</span>
-            <h3>{playlists.find((playlist) => playlist.id === selectedPlaylist)?.name ?? 'Playlist'}</h3>
+            <h3>{selectedPlaylistData?.name ?? 'Playlist'}</h3>
             <small>{items.length} videos · {formatDuration(items.reduce((total, item) => total + (item.duration_seconds ?? 0), 0))}</small>
           </div>
           <div className="playlist-detail-actions">
             <button className="playlist-detail-play" onClick={() => {
-              const playlist = playlists.find((item) => item.id === selectedPlaylist)
-              if (playlist) playWholePlaylist(playlist)
+              if (selectedPlaylistData) playWholePlaylist(selectedPlaylistData)
             }} disabled={busy || !items.length || !available}><Play size={14} fill="currentColor" /> Play playlist</button>
+            <button
+              className={`queue-toggle ${snapshot?.shuffle ? 'active' : ''}`}
+              onClick={() => void guard(async () => {
+                await setShuffle(!snapshot?.shuffle)
+                await mutateGlobal('phase5-playback-state')
+                onNotice(snapshot?.shuffle ? 'Shuffle turned off.' : 'Shuffle turned on.', 'success')
+              })}
+              disabled={busy || !available}
+              title="Toggle playback shuffle"
+            ><Shuffle size={14} /> Shuffle {snapshot?.shuffle ? 'on' : 'off'}</button>
             {folderButton('Add from folder')}
             <button className="queue-primary" onClick={() => {
               const ids = requireSelection()

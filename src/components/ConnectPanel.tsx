@@ -23,7 +23,7 @@ function toneLabel(tone: DeviceTone) {
   switch (tone) {
     case 'playing': return 'PLAYING HERE'
     case 'connected': return 'CONNECTED'
-    case 'connecting': return 'CHOOSE IN DIALOG'
+    case 'connecting': return 'PICK IN CHROME'
     case 'failed': return 'FAILED'
     default: return 'AVAILABLE'
   }
@@ -155,93 +155,86 @@ export default function ConnectPanel({
   return (
     <section ref={panelRef} className="connect-panel" role="dialog" aria-label="Cast devices" aria-labelledby="connect-title">
       <header className="connect-header">
-          <div className="connect-brand">
-            <span className="connect-mark" aria-hidden="true">RP</span>
-            <div><b>ROLLA<b className="connect-emphasis">PLAY</b></b><span>ROCKNROLLA MEDIA STATION</span></div>
+        <div>
+          <span className="connect-eyebrow">CAST CONNECT</span>
+          <h2 id="connect-title">Connect</h2>
+        </div>
+        <button className="connect-close" onClick={onClose} aria-label="Close Connect panel"><X size={17} /></button>
+      </header>
+
+      {connectedDevice && (
+        <div className="connect-current">
+          <span className="connect-current-icon"><Tv size={19} /></span>
+          <div className="connect-current-copy">
+            <strong>{connectedDevice}</strong>
+            <span>Google Cast · {castStateLabel(playback?.cast_state)}</span>
           </div>
-          <button className="connect-close" onClick={onClose} aria-label="Close Connect panel"><X size={17} /></button>
-        </header>
-
-        <div className="connect-heading">
-          <div className="connect-eyebrow">PLAYBACK DESTINATION</div>
-          <h2 id="connect-title">CONNECT</h2>
-          <p>Choose where ROLLAPLAY should play. Devices below are found on your local network.</p>
+          <span className={`connect-indicator ${receiverPlaying ? 'live' : ''}`}>
+            {receiverPlaying && <i />}
+            {receiverPlaying ? 'PLAYING HERE' : 'READY'}
+          </span>
+          <button className="connect-switch" onClick={() => void switchDevice()} title="Disconnect to choose another receiver">SWITCH</button>
         </div>
+      )}
 
-        {connectedDevice && (
-          <div className="connect-current remote">
-            <span className="connect-current-icon"><Tv size={19} /></span>
-            <div className="connect-current-copy">
-              <strong>{connectedDevice}</strong>
-              <span>Google Cast · {castStateLabel(playback?.cast_state)}</span>
-            </div>
-            <span className={`connect-indicator ${receiverPlaying ? 'live' : ''}`}>
-              {receiverPlaying && <i />}
-              {receiverPlaying ? 'PLAYING HERE' : 'READY'}
-            </span>
-            <button className="connect-switch" onClick={() => void switchDevice()} title="Disconnect to choose another receiver">SWITCH</button>
-          </div>
-        )}
+      <div className="connect-list-head">
+        <span>NEARBY DEVICES</span>
+        <button onClick={() => void refreshDevices()} disabled={isLoading} aria-label="Refresh Cast devices">
+          <RefreshCw size={13} className={isLoading ? 'spin-icon' : ''} /> REFRESH DEVICES
+        </button>
+      </div>
 
-        <div className="connect-list-head">
-          <span>NEARBY DEVICES</span>
-          <button onClick={() => void refreshDevices()} disabled={isLoading} aria-label="Refresh Cast devices">
-            <RefreshCw size={13} className={isLoading ? 'spin-icon' : ''} /> REFRESH DEVICES
-          </button>
-        </div>
+      {failed && <div className="connect-error" role="alert"><AlertCircle size={14} /><span>{failed}</span></div>}
+      {discoveryError && !failed && <div className="connect-error" role="alert"><AlertCircle size={14} /><span>Cast discovery is unavailable on this network.</span></div>}
 
-        {failed && <div className="connect-error" role="alert"><AlertCircle size={14} /><span>{failed}</span></div>}
-        {discoveryError && !failed && <div className="connect-error" role="alert"><AlertCircle size={14} /><span>Cast discovery is unavailable on this network.</span></div>}
-
-        <div className="connect-list" role="list">
-          {!devices.length && isLoading && (
-            <div className="connect-empty">
-              <LoaderCircle size={20} className="spin-icon" />
-              <strong>Searching for Cast devices…</strong>
-              <span>Checking every local network adapter for Google Cast receivers.</span>
-            </div>
-          )}
-          {!devices.length && !isLoading && (
-            <div className="connect-empty">
-              <Cast size={20} />
-              <strong>No Cast devices found</strong>
-              <span>Make sure your receiver is powered on and connected to the same LAN, then refresh.</span>
-            </div>
-          )}
-          {devices.map((device) => {
-            const tone = toneFor(device)
-            const active = tone === 'connected' || tone === 'playing'
-            return (
-              <button
-                key={device.id}
-                role="listitem"
-                className={`connect-device tone-${tone} ${active ? 'active' : ''}`}
-                onClick={() => void connect(device)}
-                disabled={active || connecting}
-              >
-                <span className="connect-device-icon"><Tv size={18} /></span>
-                <span className="connect-device-copy">
-                  <strong>{device.name}</strong>
-                  <small>{device.model || 'Google Cast'} · Google Cast</small>
-                </span>
-                <span className={`connect-device-state state-${tone}`}>{tone === 'connecting' && <LoaderCircle size={12} className="spin-icon" />}{tone === 'connected' || tone === 'playing' ? <Check size={12} /> : null}{toneLabel(tone)}</span>
-              </button>
-            )
-          })}
-        </div>
-
-        {connecting && pending && (
-          <div className="connect-picker-note" role="status">
-            <LoaderCircle size={14} className="spin-icon" />
-            <span>Chrome’s Cast dialog is opening. Choose <b>{pending.name}</b> to finish connecting.</span>
-            <button onClick={cancelConnection}>Cancel</button>
+      <div className="connect-list" role="list">
+        {!devices.length && isLoading && (
+          <div className="connect-empty">
+            <LoaderCircle size={20} className="spin-icon" />
+            <strong>Searching for Cast devices…</strong>
+            <span>Checking every local network adapter for Google Cast receivers.</span>
           </div>
         )}
+        {!devices.length && !isLoading && (
+          <div className="connect-empty">
+            <Cast size={20} />
+            <strong>No Cast devices found</strong>
+            <span>Make sure your receiver is powered on and connected to the same LAN, then refresh.</span>
+          </div>
+        )}
+        {devices.map((device) => {
+          const tone = toneFor(device)
+          const active = tone === 'connected' || tone === 'playing'
+          return (
+            <button
+              key={device.id}
+              role="listitem"
+              className={`connect-device tone-${tone} ${active ? 'active' : ''}`}
+              onClick={() => void connect(device)}
+              disabled={active || connecting}
+            >
+              <span className="connect-device-icon"><Tv size={18} /></span>
+              <span className="connect-device-copy">
+                <strong>{device.name}</strong>
+                <small>{device.model || 'Google Cast'} · Google Cast</small>
+              </span>
+              <span className={`connect-device-state state-${tone}`}>
+                {tone === 'connecting' && <LoaderCircle size={12} className="spin-icon" />}
+                {tone === 'connected' || tone === 'playing' ? <Check size={12} /> : null}
+                {toneLabel(tone)}
+              </span>
+            </button>
+          )
+        })}
+      </div>
 
-        <footer className="connect-footer">
-          <div><AlertCircle size={13} /><span>DON&apos;T SEE YOUR DEVICE?</span></div>
-          <button onClick={() => void refreshDevices()} disabled={isLoading}>REFRESH DEVICES</button>
-        </footer>
+      {connecting && pending && (
+        <div className="connect-picker-note" role="status">
+          <LoaderCircle size={14} className="spin-icon" />
+          <span>Chrome’s Cast dialog is opening. Choose <b>{pending.name}</b> to finish connecting.</span>
+          <button onClick={cancelConnection}>Cancel</button>
+        </div>
+      )}
     </section>
   )
 }

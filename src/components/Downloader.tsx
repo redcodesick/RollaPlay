@@ -9,25 +9,61 @@ import {
   prepareTools, startDownload, type DownloadProgress, type DownloaderTools,
 } from '../downloader'
 
+// The backend job outlives this view. Keep UI state in memory so switching
+// pages does not make an active download look like it vanished.
+const storedUi = {
+  folder: '',
+  linksText: '',
+  hd: true,
+  installYtDlp: true,
+  installFfmpeg: true,
+  tools: null as DownloaderTools | null,
+  busy: false,
+  preparing: false,
+  installDetail: '',
+  progress: {} as Record<number, DownloadProgress>,
+  error: '',
+  notice: '',
+  completed: new Set<number>(),
+  indexed: false,
+}
+
 export default function Downloader() {
   const { mutate: globalMutate } = useSWRConfig()
   const isDesktop = isDesktopApp()
-  const [folder, setFolder] = useState('')
-  const [linksText, setLinksText] = useState('')
-  const [hd, setHd] = useState(true)
-  const [installYtDlp, setInstallYtDlp] = useState(true)
-  const [installFfmpeg, setInstallFfmpeg] = useState(true)
-  const [tools, setTools] = useState<DownloaderTools | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [preparing, setPreparing] = useState(false)
-  const [installDetail, setInstallDetail] = useState('')
-  const [progress, setProgress] = useState<Record<number, DownloadProgress>>({})
-  const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
-  const completedRef = useRef<Set<number>>(new Set())
-  const indexedRef = useRef(false)
+  const [folder, setFolder] = useState(storedUi.folder)
+  const [linksText, setLinksText] = useState(storedUi.linksText)
+  const [hd, setHd] = useState(storedUi.hd)
+  const [installYtDlp, setInstallYtDlp] = useState(storedUi.installYtDlp)
+  const [installFfmpeg, setInstallFfmpeg] = useState(storedUi.installFfmpeg)
+  const [tools, setTools] = useState<DownloaderTools | null>(storedUi.tools)
+  const [busy, setBusy] = useState(storedUi.busy)
+  const [preparing, setPreparing] = useState(storedUi.preparing)
+  const [installDetail, setInstallDetail] = useState(storedUi.installDetail)
+  const [progress, setProgress] = useState<Record<number, DownloadProgress>>(storedUi.progress)
+  const [error, setError] = useState(storedUi.error)
+  const [notice, setNotice] = useState(storedUi.notice)
+  const completedRef = useRef<Set<number>>(storedUi.completed)
+  const indexedRef = useRef(storedUi.indexed)
   const autoCheckRef = useRef(false)
   const provisionRef = useRef<Promise<DownloaderTools> | null>(null)
+
+  useEffect(() => {
+    storedUi.folder = folder
+    storedUi.linksText = linksText
+    storedUi.hd = hd
+    storedUi.installYtDlp = installYtDlp
+    storedUi.installFfmpeg = installFfmpeg
+    storedUi.tools = tools
+    storedUi.busy = busy
+    storedUi.preparing = preparing
+    storedUi.installDetail = installDetail
+    storedUi.progress = progress
+    storedUi.error = error
+    storedUi.notice = notice
+    storedUi.completed = completedRef.current
+    storedUi.indexed = indexedRef.current
+  }, [folder, linksText, hd, installYtDlp, installFfmpeg, tools, busy, preparing, installDetail, progress, error, notice])
 
   const addToLibrary = useCallback(async () => {
     if (indexedRef.current || !folder) return
@@ -241,6 +277,11 @@ export default function Downloader() {
             placeholder={'https://www.youtube.com/watch?v=VIDEO_ID\nhttps://www.youtube.com/playlist?list=PLAYLIST_ID'}
             disabled={busy}
           />
+
+          <div className="download-quality-note">
+            <div><strong>Standard</strong><span>Single-file MP4 · fastest, widest receiver support</span></div>
+            <div><strong>HD</strong><span>H.264 video + AAC audio merged into MP4 · needs FFmpeg</span></div>
+          </div>
 
           <label className="download-check">
             <input

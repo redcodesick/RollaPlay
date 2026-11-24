@@ -65,6 +65,10 @@ export type CastEventReport = {
   position_seconds: number | null
   duration_seconds: number | null
   message: string | null
+  playback_token?: string | null
+  cast_session_id?: string | null
+  media_session_id?: string | null
+  idle_reason?: string | null
 }
 
 export type CastControlAction =
