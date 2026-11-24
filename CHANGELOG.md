@@ -2,6 +2,38 @@
 
 All notable changes to RollaPlay are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-11-24
+
+### Changed
+
+- Polished the existing visual system without changing the palette: tightened the exact `#101010`–`#FF8C32` token set, consolidated duplicate CSS, and added shared button, skeleton, empty-state, focus, hover, pressed and disabled primitives.
+- Home now leads with an honest primary action, contextual artwork when a recent file exists, real recently played thumbnails, and a clearer playlist shelf; loading states use skeletons and no content autoplays.
+- Library, Recently added, playlist detail, track tables and the playback queue now have clearer hierarchy, overlap-safe thumbnails, grouped selection actions, explicit current-track state and compact row actions.
+- The player bar uses a three-zone layout with centered transport/progress, a visible buffering spinner, disabled seek feedback and cancel-aware scrubbing.
+- Connect, Downloader, Settings, Setup and About now show real device/tool/server states with labelled fallbacks, progress summaries and loading placeholders instead of ambiguous empty values.
+- Setup, About and exit dialogs share focus-trap, Escape and backdrop-dismiss behavior; small windows keep Setup and About reachable from the bottom navigation.
+- Responsive layout was verified at 1280×800, 1366×768, 1920×1080, 1024×700, 760×700 and 480×760 with no horizontal overflow or player/sidebar overlap.
+
+### Added
+
+- Signed in-app updates through the official Tauri updater and process plugins. About now shows installed/latest versions, status, last checked time, real GitHub release notes, byte-level progress, explicit Download & Install and Restart Now actions, and safe errors with Retry.
+- Tag-triggered release workflow that verifies synchronized versions and signing secrets, builds signed NSIS/MSI artifacts, writes `latest.json` from those real artifacts and their signatures, uploads it, and verifies published assets.
+- Unit tests for updater state transitions, version comparison, constrained release-note parsing, download progress, signature/manifest/network errors, retry and restart behavior.
+- `docs/updater-audit.md`, `docs/updater-release-guide.md` and signing key/secret backup and rotation instructions.
+
+### Fixed
+
+- The compact player could place the device zone below its own bar at tablet widths; the device zone now follows the responsive grid area.
+- Playlist cover play/open controls, delete confirmation, current-track artwork and thumbnail/badge collisions were corrected.
+- Download progress rows now distinguish completed, failed, cancelled and indexing states, with a visible percentage.
+- Media-server diagnostics and setup checks show skeleton/loading states instead of briefly reporting false "Unavailable" values.
+- `prefers-reduced-motion` now suppresses transitions and animations across the app.
+
+### Notes
+
+- No Rust backend, SQLite schema, Axum range streaming, Cast bridge, downloader backend, Tauri contract or persisted setting was changed.
+- Screenshots remain in `docs/screenshots/` for the README gallery and are not release assets.
+
 ## [0.2.0] - 2026-11-24
 
 ### Changed

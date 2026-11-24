@@ -13,6 +13,7 @@ import QueuePanel from './components/QueuePanel'
 import { FolderList, useMediaFolders } from './components/LibraryFolders'
 import MediaPicker from './components/MediaPicker'
 import PlaylistManager from './components/PlaylistManager'
+import SoftwareUpdates from './components/SoftwareUpdates'
 import PlayerBar from './components/PlayerBar'
 import { CastCheck, ChromeCheck, NetworkCheck } from './components/SetupChecks'
 import {
@@ -22,7 +23,7 @@ import {
 } from './cast'
 import {
   clearWatchHistory, formatDuration, getPlaybackState, isPlaylistAvailable, listPlaylists,
-  playMediaNow, playNext, playPlaylist, playPrevious, type Phase5Notification,
+  playMediaNow, playNext, playPlaylist, playPrevious, selectPlaylist, type Phase5Notification,
   type PlaybackSnapshot, type PlaylistSummary,
 } from './playlist'
 import { formatBytes, getLocalStatus, getMediaDirectories, getMediaFiles, isDesktopApp, type MediaFile } from './media'
@@ -34,6 +35,7 @@ import {
   Sparkles, Trash2, Wifi, X,
 } from 'lucide-react'
 import { BrandMark, NoticeIcon } from './ui'
+import { APP_VERSION } from './version'
 
 type View = 'Home' | 'Library' | 'Playlists' | 'Downloader' | 'Recently added' | 'History' | 'Settings'
 type Notice = (message: string, level?: Phase5Notification['level']) => void
@@ -46,6 +48,42 @@ const navItems: { label: View; icon: typeof House }[] = [
   { label: 'History', icon: History },
   { label: 'Downloader', icon: Download },
 ]
+
+function useDialogKeyboard(onClose: () => void, ref: { current: HTMLElement | null }) {
+  const closeRef = useRef(onClose)
+  useEffect(() => { closeRef.current = onClose }, [onClose])
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusable = () => Array.from(ref.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ) ?? [])
+    focusable()[0]?.focus()
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const items = focusable()
+      if (!items.length) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      previous?.focus()
+    }
+  }, [ref])
+}
 
 function Sidebar({
   active, playlistCount, collapsed, onToggle, onNavigate, onSetup, onAbout,
@@ -103,21 +141,45 @@ function EmptyLibrary({ onSetup, onBrowse }: { onSetup: () => void; onBrowse: ()
   )
 }
 
+function RecentCard({ media, onPlay }: { media: MediaFile; onPlay: (id: number) => void }) {
+  const [imageFailed, setImageFailed] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+  const showImage = media.thumbnail_status === 'ready' && !!media.thumbnail_path && !imageFailed
+  useEffect(() => {
+    setImageFailed(false)
+    setLoaded(false)
+  }, [media.thumbnail_path, media.thumbnail_status])
+  return (
+    <button className="recent-card" title={`Play ${media.filename}`} onClick={() => onPlay(media.id)}>
+      <span className={`recent-art ${showImage ? '' : 'is-empty'}`}>
+        {showImage
+          ? <img src={convertFileSrc(media.thumbnail_path!)} alt="" onLoad={() => setLoaded(true)} onError={() => setImageFailed(true)} style={{ opacity: loaded ? 1 : 0 }} />
+          : media.thumbnail_status === 'pending' ? <Clock3 size={18} /> : <Film size={18} />}
+      </span>
+      <strong title={media.filename}>{media.filename}</strong>
+      <small>{formatBytes(media.size_bytes)}</small>
+    </button>
+  )
+}
+
 function RecentGrid({ files, limit = 6, onPlay }: { files: MediaFile[]; limit?: number; onPlay: (id: number) => void }) {
   return (
     <div className="recent-grid">
-      {files.slice(0, limit).map((media) => <button
-        key={media.id}
-        className="recent-card"
-        title={`Play ${media.filename}`}
-        onClick={() => onPlay(media.id)}
-      >
-        <span className="recent-art">{media.thumbnail_status === 'ready' && media.thumbnail_path
-          ? <img src={convertFileSrc(media.thumbnail_path)} alt="" />
-          : <Film size={18} />}</span>
-        <strong>{media.filename}</strong>
-        <small>{formatBytes(media.size_bytes)}</small>
-      </button>)}
+      {files.slice(0, limit).map((media) => <RecentCard key={media.id} media={media} onPlay={onPlay} />)}
+    </div>
+  )
+}
+
+function RecentSkeleton({ limit = 6 }: { limit?: number }) {
+  return (
+    <div className="recent-grid is-loading" aria-hidden="true">
+      {Array.from({ length: limit }, (_, index) => (
+        <div className="recent-card skeleton" key={index}>
+          <span className="skeleton-art recent-art" />
+          <span className="skeleton-line" />
+          <span className="skeleton-line short" />
+        </div>
+      ))}
     </div>
   )
 }
@@ -134,28 +196,62 @@ function HomeSpotlight({
 }) {
   const playlist = playlists?.[0]
   const latest = recentFiles?.[0]
-  const continueTitle = playlist?.name ?? latest?.filename ?? null
+  const [heroImageFailed, setHeroImageFailed] = useState(false)
+  const [heroImageLoaded, setHeroImageLoaded] = useState(false)
+  const heroThumb = latest?.thumbnail_status === 'ready' && latest.thumbnail_path ? convertFileSrc(latest.thumbnail_path) : null
+  const heroImage = heroThumb && !heroImageFailed ? heroThumb : '/media/featured-still.png'
+
+  useEffect(() => {
+    setHeroImageFailed(false)
+    setHeroImageLoaded(false)
+  }, [heroThumb])
+
+  if (playlists === undefined || recentFiles === undefined) {
+    return (
+      <section className="feature-skeleton" aria-label="Loading your media space">
+        <span className="skeleton-line wide" />
+        <span className="skeleton-line title" />
+        <span className="skeleton-line copy" />
+        <div className="skeleton-actions"><span className="skeleton-pill skeleton" /><span className="skeleton-pill skeleton" /></div>
+      </section>
+    )
+  }
+
+  const headline = playlist
+    ? 'Your playlist is ready.'
+    : latest
+      ? 'Fresh from your library.'
+      : 'Your media station starts here.'
   const detail = playlist
     ? `${playlist.item_count} video${playlist.item_count === 1 ? '' : 's'} · ${formatDuration(playlist.duration_seconds)} · ready for your TV.`
     : latest
-      ? `${formatBytes(latest.size_bytes)} · the newest addition to your collection.`
+      ? `${latest.filename} · ${formatBytes(latest.size_bytes)} · the newest addition to your collection.`
       : 'Add a folder with your local videos and RollaPlay will index it here.'
-  const continuePlaying = () => {
+  const primaryLabel = playlist ? `Play ${playlist.name}` : latest ? `Play ${latest.filename}` : 'Browse Library'
+  const primaryAction = () => {
     if (playlist) onPlayPlaylist(playlist.id)
     else if (latest) onPlayMedia(latest.id)
+    else onOpenLibrary()
   }
+
   return (
     <section className="featured-card">
-      <img src="/media/featured-still.png" alt="" />
+      <img
+        src={heroImage}
+        alt=""
+        onError={() => setHeroImageFailed(true)}
+        onLoad={() => setHeroImageLoaded(true)}
+        style={{ opacity: heroImage === heroThumb ? (heroImageLoaded ? 1 : 0) : 1 }}
+      />
       <div className="feature-overlay" />
       <div className="feature-content">
-        <div className="feature-tag"><span /> YOUR MUSIC. YOUR RULES.</div>
-        <h2>YOUR MUSIC.<br />YOUR RULES.</h2>
+        <div className="feature-tag"><span /> LOCAL MEDIA. LOUD ATTITUDE.</div>
+        <h2>{headline}</h2>
         <p>{detail}</p>
         <div className="feature-actions">
-          <button className="feature-button" onClick={onOpenLibrary}><Library size={17} /> Browse Library <span>→</span></button>
+          <button className="feature-button" onClick={primaryAction} title={primaryLabel}><Play size={16} fill="currentColor" /> {primaryLabel} <span>→</span></button>
+          <button className="feature-secondary" onClick={onOpenLibrary}><Library size={16} /> Browse Library</button>
           <button className="feature-secondary" onClick={onOpenDownloader}><Download size={16} /> Open Downloader</button>
-          {continueTitle && <button className="feature-secondary" onClick={continuePlaying}><Play size={15} /> Continue playing · {continueTitle}</button>}
         </div>
       </div>
     </section>
@@ -165,10 +261,11 @@ function HomeSpotlight({
 const homePlaylistTones = ['tone-red', 'tone-amber', 'tone-paper', 'tone-steel']
 
 function HomePlaylistShelf({
-  playlists, onPlay, onOpenAll,
+  playlists, onPlay, onOpenPlaylist, onOpenAll,
 }: {
   playlists: PlaylistSummary[] | undefined
   onPlay: (id: number) => void
+  onOpenPlaylist: (id: number) => void
   onOpenAll: () => void
 }) {
   if (!playlists?.length) return null
@@ -186,8 +283,8 @@ function HomePlaylistShelf({
             aria-label={`Play ${playlist.name}`}
             title={`Play ${playlist.name}`}
           ><Play size={18} fill="currentColor" /></button>
-          <button className="home-playlist-name" onClick={onOpenAll}>
-            <strong title={playlist.name}>{playlist.name}</strong>
+          <button className="home-playlist-name" onClick={() => onOpenPlaylist(playlist.id)} title={`Open ${playlist.name}`}>
+            <strong>{playlist.name}</strong>
             <small>{playlist.item_count} video{playlist.item_count === 1 ? '' : 's'}</small>
           </button>
         </div>)}
@@ -215,6 +312,8 @@ function SetupDialog({
   const folders = useMediaFolders()
   const [skippedFolders, setSkippedFolders] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const dialogRef = useRef<HTMLElement | null>(null)
+  useDialogKeyboard(onClose, dialogRef)
   const lastStep = steps.length - 1
   const optionalSteps = new Set([2, 3])
 
@@ -249,10 +348,10 @@ function SetupDialog({
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { click('close_backdrop'); onClose() } }}>
-      <section className={`setup-dialog ${step > 0 && step < lastStep ? 'setup-dialog-wide' : ''}`} role="dialog" aria-modal="true" aria-labelledby="setup-title">
+      <section ref={dialogRef} className={`setup-dialog ${step > 0 && step < lastStep ? 'setup-dialog-wide' : ''}`} role="dialog" aria-modal="true" aria-labelledby="setup-title">
         <button className="dialog-close" onClick={() => { click('close'); onClose() }} aria-label="Close setup">×</button>
         <div className="setup-eyebrow"><Sparkles size={15} /> FIRST-RUN SETUP <span className="setup-step-count">STEP {step + 1} OF {steps.length}</span></div>
-        <div className="step-progress">{steps.map((item, index) => <span key={item} className={index <= step ? 'complete' : ''} />)}</div>
+        <div className="step-progress">{steps.map((item, index) => <span key={item} className={index < step ? 'complete' : index === step ? 'current' : ''} />)}</div>
 
         {step === 0 && <>
           <div className="setup-icon"><Clapperboard size={25} /></div>
@@ -280,6 +379,7 @@ function SetupDialog({
             onRemove={(directory) => { click('remove_folder', { directoryId: directory.id }); void folders.removeFolder(directory) }}
             onAdd={() => { click('select_media_folder_empty'); void folders.addFolders() }}
             addDisabled={!isDesktop || folders.isAdding}
+            hideEmptyAdd
           />
           {!hasFolders && !skippedFolders && <div className="setup-note warning"><AlertCircle size={17} /><span>Add at least one folder to continue, or skip this step and add folders later from the Media library.</span></div>}
           {skippedFolders && <div className="setup-note"><ShieldCheck size={17} /><span>Folders skipped. You can add them later from the Media library or Settings.</span></div>}
@@ -342,15 +442,20 @@ function SetupDialog({
 }
 
 function AboutDialog({
-  onClose, onOpenSetup, folderCount, videoCount, playlistCount,
+  onClose, onOpenSetup, folderCount, videoCount, playlistCount, foldersLoading, videosLoading, playlistsLoading,
 }: {
   onClose: () => void
   onOpenSetup: () => void
   folderCount: number
   videoCount: number
   playlistCount: number
+  foldersLoading?: boolean
+  videosLoading?: boolean
+  playlistsLoading?: boolean
 }) {
-  const [info, setInfo] = useState({ name: 'RollaPlay', version: '0.1.0', tauri: '—' })
+  const [info, setInfo] = useState({ name: 'RollaPlay', version: APP_VERSION, tauri: '—' })
+  const dialogRef = useRef<HTMLElement | null>(null)
+  useDialogKeyboard(onClose, dialogRef)
   useEffect(() => {
     if (!isDesktopApp()) return
     let active = true
@@ -361,7 +466,7 @@ function AboutDialog({
   }, [])
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <section className="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title">
+      <section ref={dialogRef} className="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title">
         <button className="dialog-close" onClick={onClose} aria-label="Close about">×</button>
         <div className="setup-eyebrow"><BrandMark size={16} /> ABOUT THIS APP</div>
         <div className="about-brand">
@@ -372,11 +477,12 @@ function AboutDialog({
         <dl className="about-facts">
           <div><dt>Version</dt><dd>{info.version}</dd></div>
           <div><dt>Tauri runtime</dt><dd>{info.tauri}</dd></div>
-          <div><dt>Platform</dt><dd>Windows desktop</dd></div>
-          <div><dt>Media folders</dt><dd>{folderCount}</dd></div>
-          <div><dt>Indexed videos</dt><dd>{videoCount}</dd></div>
-          <div><dt>Saved playlists</dt><dd>{playlistCount}</dd></div>
+          <div><dt>Platform</dt><dd>{isDesktopApp() ? 'Windows desktop' : 'Browser preview'}</dd></div>
+          <div><dt>Media folders</dt><dd>{foldersLoading ? '—' : folderCount}</dd></div>
+          <div><dt>Indexed videos</dt><dd>{videosLoading ? '—' : videoCount}</dd></div>
+          <div><dt>Saved playlists</dt><dd>{playlistsLoading ? '—' : playlistCount}</dd></div>
         </dl>
+        <SoftwareUpdates installedVersion={info.version} />
         <div className="about-note"><ShieldCheck size={16} /><span>Metadata, playlists and settings stay on this device. Casting uses Google Chrome and your home network only.</span></div>
         <div className="setup-footer"><button className="button-text" onClick={onOpenSetup}>Open setup guide <span>→</span></button><button className="button-primary" onClick={onClose}>Done</button></div>
       </section>
@@ -385,9 +491,11 @@ function AboutDialog({
 }
 
 function ExitConfirmDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+  const dialogRef = useRef<HTMLElement | null>(null)
+  useDialogKeyboard(onCancel, dialogRef)
   return (
-    <div className="dialog-backdrop" role="presentation">
-      <section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="exit-title" aria-describedby="exit-copy">
+    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel() }}>
+      <section ref={dialogRef} className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="exit-title" aria-describedby="exit-copy">
         <div className="setup-icon"><AlertCircle size={25} /></div>
         <h2 id="exit-title">Are you sure you want to exit?</h2>
         <p id="exit-copy">Receiver playback will stop and the Cast connection will close. Your library, playlists and settings are saved on this device.</p>
@@ -427,8 +535,8 @@ function SettingsView({
         </article>
         <article className="settings-card" id="settings-playback">
           <div className="settings-card-icon"><Gauge size={19} /></div>
-          <div><h3>Playback</h3><p>Autoplay, repeat, and shuffle preferences.</p></div>
-          <button className="settings-action" onClick={onPlayback}>Configure <span>→</span></button>
+          <div><h3>Playback</h3><p>Shuffle and receiver-driven queue controls live with your playlists.</p></div>
+          <button className="settings-action" onClick={onPlayback}>Open playlists <span>→</span></button>
         </article>
         <article className="settings-card" id="settings-downloader">
           <div className="settings-card-icon"><Download size={19} /></div>
@@ -467,6 +575,7 @@ function App() {
   const [connectOpen, setConnectOpen] = useState(false)
   const [playingOverride, setPlayingOverride] = useState<boolean | null>(null)
   const [volumePreview, setVolumePreview] = useState<number | null>(null)
+  const [mutePreview, setMutePreview] = useState<boolean | null>(null)
   const senderHostRef = useRef<HTMLDivElement | null>(null)
   const senderEmbeddedRef = useRef(false)
   const playlistReady = isPlaylistAvailable()
@@ -475,17 +584,17 @@ function App() {
     getPlaybackState,
     { refreshInterval: 1500 },
   )
-  const { data: playlists } = useSWR(
+  const { data: playlists, isLoading: playlistsLoading } = useSWR(
     playlistReady ? 'phase5-playlists' : null,
     listPlaylists,
     { refreshInterval: 5000 },
   )
-  const { data: recentFiles } = useSWR(
+  const { data: recentFiles, isLoading: recentFilesLoading } = useSWR(
     isDesktopApp() ? ['recent-media', '', '', 'date'] as const : null,
     getMediaFiles,
     { refreshInterval: 10000 },
   )
-  const { data: mediaDirectories } = useSWR(
+  const { data: mediaDirectories, isLoading: directoriesLoading } = useSWR(
     isDesktopApp() ? 'about-media-directories' : null,
     getMediaDirectories,
     { refreshInterval: 30000 },
@@ -503,6 +612,12 @@ function App() {
   }, [mutatePhase5, showNotice])
   const playSelectedPlaylist = useCallback((id: number) => {
     void playPlaylist(id).then(() => mutatePhase5()).catch((error) => showNotice(String(error), 'error'))
+  }, [mutatePhase5, showNotice])
+  const openSelectedPlaylist = useCallback((id: number) => {
+    void selectPlaylist(id)
+      .then(() => mutatePhase5())
+      .then(() => setActive('Playlists'))
+      .catch((error) => showNotice(String(error), 'error'))
   }, [mutatePhase5, showNotice])
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((previous) => {
@@ -673,6 +788,9 @@ function App() {
       setVolumePreview(null)
     }
   }, [castPlayback?.volume_level, volumePreview])
+  useEffect(() => {
+    if (mutePreview !== null && castPlayback?.muted === mutePreview) setMutePreview(null)
+  }, [castPlayback?.muted, mutePreview])
   const pageTitle = useMemo(() => active === 'Home' ? 'Good evening' : active, [active])
   const closeSetup = () => { completeSetup(); setSetupOpen(false) }
   const openSetup = () => { setSetupStep(0); setSetupOpen(true) }
@@ -801,9 +919,10 @@ function App() {
             <div className="section-eyebrow">YOUR COLLECTION</div>
             <h1>{pageTitle}</h1>
             <p>The newest videos indexed from your local folders.</p>
-            {recentFiles && recentFiles.length > 0
-              ? <RecentGrid files={recentFiles} limit={24} onPlay={playSelectedMedia} />
-              : <EmptyLibrary onSetup={openSetup} onBrowse={browse} />}
+            {recentFilesLoading ? <RecentSkeleton limit={12} />
+              : recentFiles && recentFiles.length > 0
+                ? <RecentGrid files={recentFiles} limit={24} onPlay={playSelectedMedia} />
+                : <EmptyLibrary onSetup={openSetup} onBrowse={browse} />}
           </section>
           : active === 'History' ? <section className="section-page">
             <div className="section-eyebrow">ACTIVITY</div>
@@ -829,15 +948,16 @@ function App() {
             onOpenDownloader={() => setActive('Downloader')}
           />
           <div className="library-summary"><div className="summary-title"><div><div className="section-eyebrow">YOUR COLLECTION</div><h2>Recently added</h2></div><button className="text-link" onClick={() => setActive('Recently added')}>View all <span>→</span></button></div>
-             {recentFiles && recentFiles.length > 0
-               ? <RecentGrid files={recentFiles} onPlay={playSelectedMedia} />
-               : <EmptyLibrary onSetup={openSetup} onBrowse={browse} />}
+             {recentFilesLoading ? <RecentSkeleton />
+               : recentFiles && recentFiles.length > 0
+                 ? <RecentGrid files={recentFiles} onPlay={playSelectedMedia} />
+                 : <EmptyLibrary onSetup={openSetup} onBrowse={browse} />}
            </div>
           {!setupDone && <>
             <div className="content-heading first-steps-heading"><div><div className="section-eyebrow">START HERE</div><h2>Make it yours</h2></div><button className="text-link" onClick={openSetup}>Setup guide <span>→</span></button></div>
             <div className="quick-cards"><button className="quick-card" onClick={browse}><span className="quick-card-icon purple"><FolderPlus size={19} /></span><span className="quick-card-copy"><strong>Add your folders</strong><small>Build your local library</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={() => void openConnect()}><span className="quick-card-icon blue"><Cast size={19} /></span><span className="quick-card-copy"><strong>Connect your TV</strong><small>{castDevice ? `Casting to ${castDevice}` : 'Choose a device'}</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={openNetworkSetup}><span className="quick-card-icon amber"><HardDrive size={19} /></span><span className="quick-card-copy"><strong>Check your setup</strong><small>Network and preferences</small></span><span className="card-arrow">↗</span></button></div>
           </>}
-          <HomePlaylistShelf playlists={playlists} onPlay={playSelectedPlaylist} onOpenAll={() => setActive('Playlists')} />
+          <HomePlaylistShelf playlists={playlists} onPlay={playSelectedPlaylist} onOpenPlaylist={openSelectedPlaylist} onOpenAll={() => setActive('Playlists')} />
         </>}
         <footer className="app-footer"><span>ROLLAPLAY <b>•</b> LOCAL MEDIA. LOUD ATTITUDE.</span><span><ShieldCheck size={13} /> LOCAL FIRST</span></footer>
       </main>
@@ -856,15 +976,21 @@ function App() {
         progressPercent={progressPercent}
         previousTitle={phase5Snapshot ? `Previous · restarts after ${phase5Snapshot.previous_restart_threshold_seconds}s; with Shuffle follows history` : 'Previous'}
         queueAvailable={!!phase5Snapshot?.current_entry_id}
-        muted={!!castPlayback?.muted}
+        muted={mutePreview ?? !!castPlayback?.muted}
         volume={volumePreview ?? castPlayback?.volume_level ?? 1}
         onPrevious={queuePrevious}
         onNext={queueNext}
         onTogglePlay={toggleCastPlay}
         onSeekPreview={setSeekPreview}
         onCommitSeek={commitSeek}
+        onCancelSeek={() => setSeekPreview(null)}
         onOpenConnect={() => void openConnect()}
-        onMute={() => void castSendControl('set_mute', { muted: !castPlayback?.muted }).catch((error) => showNotice(String(error), 'error'))}
+        onMute={() => {
+          const nextMuted = !(mutePreview ?? !!castPlayback?.muted)
+          setMutePreview(nextMuted)
+          void castSendControl('set_mute', { muted: nextMuted })
+            .catch((error) => { setMutePreview(null); showNotice(String(error), 'error') })
+        }}
         onVolume={(value) => {
           setVolumePreview(value)
           void castSendControl('set_volume', { volume: value }).catch((error) => showNotice(String(error), 'error'))
@@ -890,6 +1016,9 @@ function App() {
         folderCount={mediaDirectories?.length ?? 0}
         videoCount={recentFiles?.length ?? 0}
         playlistCount={playlists?.length ?? 0}
+        foldersLoading={directoriesLoading}
+        videosLoading={recentFilesLoading}
+        playlistsLoading={playlistsLoading}
       />}
       {exitConfirmOpen && <ExitConfirmDialog onCancel={() => setExitConfirmOpen(false)} onConfirm={() => void confirmExit()} />}
     </div>

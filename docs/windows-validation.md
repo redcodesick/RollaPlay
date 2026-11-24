@@ -192,6 +192,17 @@ Build/test results for the current 0.1.1 run: `cargo test --manifest-path src-ta
 - [x] An empty playlist now has an **Add videos from folder** action that opens the native folder picker, adds and scans the folders, and adds the newly indexed videos to that playlist.
 - [ ] On a fresh install, tick HD, paste a public playlist link, choose a folder, then confirm every video appears in Recently added and plays with picture on the receiver. A private link must still show the private-link explanation instead of a generic failure.
 
+## 0.3.0 visual polish verification
+
+- **Palette and typography (PASS).** `src/styles.css` and `src/redesign.css` now resolve to exactly the ten required palette hex values (`#101010`, `#151515`, `#1B1B1B`, `#242424`, `#303030`, `#F2F0EC`, `#A3A3A3`, `#707070`, `#E53935`, `#FF8C32`) and palette-derived `rgba()` values. No `@font-face`, web-font import or remote font URL remains; the UI uses local `Bahnschrift`, `Segoe UI Variable` and `Segoe UI` only.
+- **Static checks (PASS).** `pnpm build` (TypeScript check + Vite production bundle) passed; `node --check src-tauri/cast-sender/sender.js` passed. CSS token audit reported no missing variable definitions and no off-palette hex values.
+- **Rust tests (PASS).** `cargo test --manifest-path src-tauri/Cargo.toml` passed with 82 passed, 0 failed, 1 ignored. The ignored case remains the Windows Shell thumbnail test that needs `WMS_TEST_VIDEO`.
+- **Responsive DOM audit (PASS).** Browser-preview layouts at 1280×800, 1366×768, 1920×1080, 1024×700, 760×700 and 480×760 were measured across Home, Library, Playlists, Recently added, History, Downloader, Settings, Setup, About and Connect. Every case had zero horizontal overflow (`scrollWidth <= viewportWidth`), the player stayed inside its bar, and the bottom navigation stayed clear of the player. A tablet-width grid bug that placed the device zone below the player was fixed by restoring the `device` grid area.
+- **Small-window access (PASS).** At 480 px the bottom bar exposes Home, Library, Playlists, Recently added, History, Downloader, Settings, Setup guide and About as icon buttons. Setup and About were reachable and dismissible via Escape, backdrop click and their close buttons; focus moved into the dialog on open and returned to the previous control on close.
+- **Packaged build (PASS).** `pnpm tauri build` produced `RollaPlay_0.3.0_x64-setup.exe` and `RollaPlay_0.3.0_x64_en-US.msi`. No Rust backend source, SQLite schema, Axum streaming rules, Cast security logic, downloader backend or Tauri command contract was modified for 0.3.0.
+- **Screenshots (PASS).** Seven README gallery captures were recaptured from the running native Windows app into `docs/screenshots/` at 1326×939 using UI Automation navigation and per-window capture; each file was OCR-checked for its intended screen and absence of modal overlays. No mock or fabricated library/cast data was used.
+- **Release assets (PASS).** The seven screenshot images were removed from the `v0.2.0` GitHub release; only the two installers remain as uploaded assets, and the release body no longer embeds raw screenshot links. Future releases keep screenshots in the README only.
+
 ## Run notes
 
 For each item, record **Pass / Fail / Blocked**, steps and expected/actual result, relevant logs, and a screenshot or database query when useful. A blocked test is not a pass. Run on real Windows Shell providers; do not substitute a simulated thumbnail provider.

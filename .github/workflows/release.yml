@@ -1,0 +1,164 @@
+name: Release signed Windows update
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, sign and publish stable release
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify stable tag and synchronized versions
+        shell: pwsh
+        run: node scripts/verify-release-version.mjs "${{ github.ref_name }}"
+
+      - name: Require updater signing secrets
+        shell: pwsh
+        env:
+          PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PRIVATE_KEY)) {
+            throw 'TAURI_SIGNING_PRIVATE_KEY is missing. Configure the secret before tagging a release.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:PRIVATE_KEY_PASSWORD)) {
+            throw 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD is missing. Configure the secret before tagging a release.'
+          }
+          Write-Host 'Signing secrets are present.'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 12.3.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22.14.0'
+          cache: pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run frontend tests
+        run: pnpm test
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Run Rust tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Build signed NSIS and MSI installers
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri build --ci
+
+      - name: Verify signed build artifacts
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:RELEASE_TAG.Substring(1)
+          $nsisDir = 'src-tauri/target/release/bundle/nsis'
+          $msiDir = 'src-tauri/target/release/bundle/msi'
+          $required = @(
+            (Join-Path $nsisDir "RollaPlay_${version}_x64-setup.exe"),
+            (Join-Path $nsisDir "RollaPlay_${version}_x64-setup.exe.sig"),
+            (Join-Path $msiDir "RollaPlay_${version}_x64_en-US.msi"),
+            (Join-Path $msiDir "RollaPlay_${version}_x64_en-US.msi.sig")
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Missing signed build artifact: $path"
+            }
+            if ((Get-Item -LiteralPath $path).Length -le 0) {
+              throw "Empty signed build artifact: $path"
+            }
+          }
+          Write-Host 'Signed NSIS and MSI artifacts are present.'
+
+      - name: Create GitHub Release with signed artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:RELEASE_TAG
+          $version = $tag.Substring(1)
+          $nsis = Get-Item -LiteralPath "src-tauri/target/release/bundle/nsis/RollaPlay_${version}_x64-setup.exe"
+          $nsisSig = Get-Item -LiteralPath "src-tauri/target/release/bundle/nsis/RollaPlay_${version}_x64-setup.exe.sig"
+          $msi = Get-Item -LiteralPath "src-tauri/target/release/bundle/msi/RollaPlay_${version}_x64_en-US.msi"
+          $msiSig = Get-Item -LiteralPath "src-tauri/target/release/bundle/msi/RollaPlay_${version}_x64_en-US.msi.sig"
+          gh release create $tag --title "RollaPlay $version" --generate-notes $nsis.FullName $nsisSig.FullName $msi.FullName $msiSig.FullName
+
+      - name: Generate and upload latest.json
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:RELEASE_TAG
+          $release = gh release view $tag --json body,publishedAt | ConvertFrom-Json
+          if ([string]::IsNullOrWhiteSpace($release.body)) {
+            throw 'The GitHub Release body is empty; latest.json must contain the real release notes.'
+          }
+          Set-Content -LiteralPath release-notes.md -Value $release.body -Encoding utf8
+          node scripts/create-latest-json.mjs $tag release-notes.md $release.publishedAt latest.json
+          gh release upload $tag latest.json --clobber
+
+      - name: Verify published assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:RELEASE_TAG
+          $version = $tag.Substring(1)
+          $names = @(gh release view $tag --json assets --jq '.assets[].name')
+          $required = @(
+            "RollaPlay_${version}_x64-setup.exe",
+            "RollaPlay_${version}_x64-setup.exe.sig",
+            "RollaPlay_${version}_x64_en-US.msi",
+            "RollaPlay_${version}_x64_en-US.msi.sig",
+            'latest.json'
+          )
+          foreach ($name in $required) {
+            if ($names -notcontains $name) { throw "Missing release asset: $name" }
+          }
+          $screenshots = @($names | Where-Object { $_ -match '\.(png|jpe?g|gif|webp)$' })
+          if ($screenshots.Count -gt 0) {
+            throw "Screenshots must not be attached to releases: $($screenshots -join ', ')"
+          }
+          Write-Host 'Published assets verified.'

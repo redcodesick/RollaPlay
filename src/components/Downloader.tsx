@@ -252,6 +252,9 @@ export default function Downloader() {
   const toolLabel = (found?: boolean, ready?: boolean) => ready ? 'ready' : found ? 'not responding' : 'not installed'
   const toolClass = (ready?: boolean, found?: boolean) => ready ? 'ok' : found ? 'warn' : ''
   const orderedProgress = Object.values(progress).sort((a, b) => a.index - b.index)
+  const completedCount = orderedProgress.filter((item) => item.phase === 'complete').length
+  const failedCount = orderedProgress.filter((item) => item.phase === 'failed').length
+  const cancelledCount = orderedProgress.filter((item) => item.phase === 'cancelled').length
 
   return (
     <section className="section-page downloader-page">
@@ -337,20 +340,27 @@ export default function Downloader() {
           {installDetail && <div className="download-install-detail">{installDetail}</div>}
           {orderedProgress.length > 0 && <div className="download-progress-list">
             {orderedProgress.map((item) => (
-              <div key={item.index} className="download-progress-row">
-                <span className={`download-phase phase-${item.phase}`}>{item.phase === 'complete' ? <Check size={14} /> : item.phase === 'failed' ? <AlertCircle size={14} /> : <LoaderCircle size={14} className="spin-icon" />}</span>
+              <div key={item.index} className={`download-progress-row phase-${item.phase}`}>
+                <span className={`download-phase phase-${item.phase}`}>{item.phase === 'complete' ? <Check size={14} /> : item.phase === 'failed' ? <AlertCircle size={14} /> : item.phase === 'cancelled' ? <X size={14} /> : <LoaderCircle size={14} className="spin-icon" />}</span>
                 <span className="download-progress-copy">
                   <strong>{item.total > 1 ? `Link ${item.index + 1} of ${item.total}` : 'Download'}</strong>
                   <small>{item.detail}</small>
-                  {item.percent !== null && item.phase !== 'failed' && item.phase !== 'cancelled' && (
-                    <span className="download-progress-track" aria-hidden="true">
+                  {item.percent !== null && item.phase !== 'failed' && item.phase !== 'cancelled' && <>
+                    <span className="download-progress-track">
                       <span style={{ width: `${Math.max(0, Math.min(100, item.percent))}%` }} />
                     </span>
-                  )}
+                    <span className="download-progress-percent">{Math.max(0, Math.min(100, item.percent))}%</span>
+                  </>}
                 </span>
               </div>
             ))}
           </div>}
+          {orderedProgress.length > 0 && <ul className="download-summary">
+            <li>{completedCount} completed</li>
+            {failedCount > 0 && <li className="is-failed">{failedCount} failed</li>}
+            {cancelledCount > 0 && <li>{cancelledCount} cancelled</li>}
+            <li>{indexedRef.current ? 'Indexed into library' : 'Indexing when finished'}</li>
+          </ul>}
           {!orderedProgress.length && !installDetail && <p className="download-hint">Nothing downloading yet. Files are saved as MP4 and indexed automatically.</p>}
         </div>
       </div>

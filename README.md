@@ -13,33 +13,33 @@ RollaPlay (the RockNRolla Media Station) is a local-first Tauri 2 desktop app fo
 
 ## Screenshots
 
-Captured from the native Windows app after the 0.2.0 redesign. Click any image to open the full-size capture.
+Captured from the native Windows app after the 0.3.0 visual polish pass. Click any image to open the full-size capture.
 
 <table>
   <tr>
     <td align="center" width="50%">
       <a href="docs/screenshots/home.png"><img src="docs/screenshots/home.png" width="480" alt="RollaPlay Home screen"></a><br>
-      <strong>Home</strong> — hero actions, Continue Playing, real Recently added, and playlist shelf.
+      <strong>Home</strong> — contextual hero action, real recently added artwork, and playlist shelf.
     </td>
     <td align="center" width="50%">
       <a href="docs/screenshots/library.png"><img src="docs/screenshots/library.png" width="480" alt="RollaPlay Library poster grid"></a><br>
-      <strong>Library</strong> — poster grid, compact Cast action, search, sort, filter, and thumbnail controls.
+      <strong>Library</strong> — poster grid, grouped selection actions, search, sort, filter, and thumbnail controls.
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
       <a href="docs/screenshots/playlist.png"><img src="docs/screenshots/playlist.png" width="480" alt="RollaPlay playlist detail"></a><br>
-      <strong>Playlist</strong> — generated artwork, duration, track list, and context actions.
+      <strong>Playlist</strong> — generated artwork, duration, current-track state, and delete confirmation.
     </td>
     <td align="center" width="50%">
       <a href="docs/screenshots/connect.png"><img src="docs/screenshots/connect.png" width="480" alt="RollaPlay Connect receiver picker"></a><br>
-      <strong>Connect</strong> — app-owned picker listing only real discovered receivers.
+      <strong>Connect</strong> — app-owned picker with real discovered receivers and state labels.
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
       <a href="docs/screenshots/downloader.png"><img src="docs/screenshots/downloader.png" width="480" alt="RollaPlay Downloader"></a><br>
-      <strong>Downloader</strong> — URL, destination, quality choice, and real tool/progress status.
+      <strong>Downloader</strong> — URL, destination, quality choice, and live tool/progress states.
     </td>
     <td align="center" width="50%">
       <a href="docs/screenshots/setup.png"><img src="docs/screenshots/setup.png" width="480" alt="RollaPlay first-run setup"></a><br>
@@ -74,13 +74,20 @@ Prerequisites on Windows: Node.js with pnpm 12, a Rust toolchain (Cargo), WebVie
 pnpm install
 pnpm dev                 # Vite preview at http://localhost:5173 (UI only)
 pnpm build               # type check + production bundle in dist/
+pnpm test                # updater state-machine and release-note tests
 cargo test --manifest-path src-tauri/Cargo.toml
 pnpm tauri build         # app + NSIS and MSI installers
 ```
 
-Installers land in `src-tauri/target/release/bundle/nsis/RollaPlay_0.2.0_x64-setup.exe` and `src-tauri/target/release/bundle/msi/RollaPlay_0.2.0_x64_en-US.msi`. Generated folders (`node_modules`, `dist`, `src-tauri/target`, `src-tauri/gen`, `.backup`) are gitignored and never committed.
+Installers land in `src-tauri/target/release/bundle/nsis/RollaPlay_0.3.0_x64-setup.exe` and `src-tauri/target/release/bundle/msi/RollaPlay_0.3.0_x64_en-US.msi`. Generated folders (`node_modules`, `dist`, `src-tauri/target`, `src-tauri/gen`, `.backup`) are gitignored and never committed. Screenshots are documentation assets for the README gallery only; do not attach them to GitHub releases.
 
 App data (SQLite database, thumbnail cache, diagnostics log) lives under `%LOCALAPPDATA%\app.windowsmediastation.local`. Setup completion is tracked locally as `wms.setup.completed`, and the sidebar preference as `wms.sidebar.collapsed`.
+
+## Signed updates
+
+**About → Software updates** checks the official GitHub Releases manifest, shows real signed release notes and byte-level download progress, and only installs after you choose **Download & Install**. It never installs silently, never downgrades, and never accepts unsigned artifacts. NSIS installs stay on signed NSIS builds; MSI installs stay on signed MSI builds. A separate **Restart Now** action is shown after installation; Windows may close the app while launching the installer, in which case reopen it from the Start menu.
+
+Releases are published by `.github/workflows/release.yml` from stable `v*` tags. The private signing key lives only in GitHub Actions Secrets; the public key is embedded in `src-tauri/tauri.conf.json`. See `docs/updater-release-guide.md` for key generation, secure backup, rotation, release steps, failure handling and the required real-app E2E checklist. Screenshots remain documentation assets and are not attached to releases.
 
 ## Thumbnail defaults
 

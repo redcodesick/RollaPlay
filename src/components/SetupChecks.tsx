@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react'
 import useSWR from 'swr'
 import {
-  AlertCircle, Cast, Check, LoaderCircle, Monitor, RefreshCw, ShieldCheck, Wifi,
+  AlertCircle, Cast, Check, Monitor, RefreshCw, ShieldCheck, Wifi,
 } from 'lucide-react'
 import { isDesktopApp } from '../media'
 import {
@@ -29,6 +29,14 @@ function DesktopOnlyNote({ children }: { children: string }) {
   return <div className="setup-note"><ShieldCheck size={17} /><span>{children}</span></div>
 }
 
+function CheckSkeleton({ rows = 4 }: { rows?: number }) {
+  return (
+    <div className="setup-check-skeleton" aria-hidden="true">
+      {Array.from({ length: rows }, (_, index) => <span key={index} className={`skeleton-line ${index % 2 ? 'short' : ''}`} />)}
+    </div>
+  )
+}
+
 export function ChromeCheck({ onNotice }: { onNotice: Notice }) {
   const isDesktop = isDesktopApp()
   const [busy, setBusy] = useState(false)
@@ -54,8 +62,7 @@ export function ChromeCheck({ onNotice }: { onNotice: Notice }) {
   return (
     <div className="setup-checks">
       {error && <div className="library-message error" role="alert"><AlertCircle size={16} />{friendlyError(error)}</div>}
-      {isLoading && <div className="library-loading"><LoaderCircle size={17} className="spin-icon" /> Checking Google Chrome…</div>}
-      {data && <>
+      {isLoading ? <CheckSkeleton /> : data && <>
         <CheckRow label="Google Chrome" value={data.chrome_installed ? 'Detected' : 'Not found'} />
         <CheckRow label="Chrome path" value={data.chrome_path} />
         <CheckRow label="Sender bridge" value={data.bridge_state} />
@@ -97,13 +104,14 @@ export function NetworkCheck({ onNotice }: { onNotice: Notice }) {
   return (
     <div className="setup-checks">
       {(statusError || networkError) && <div className="library-message error" role="alert"><AlertCircle size={16} />{friendlyError(statusError ?? networkError)}</div>}
-      {statusLoading && <div className="library-loading"><LoaderCircle size={17} className="spin-icon" /> Reading network status…</div>}
-      <CheckRow label="Server state" value={status?.state ?? null} />
-      <CheckRow label="Private LAN IPv4" value={status?.lan_ipv4 ?? network?.selected?.ipv4 ?? null} />
-      <CheckRow label="Interface" value={status?.interface_display_name ?? network?.selected?.display_name ?? network?.selected?.interface_name ?? null} />
-      <CheckRow label="Listening address" value={status?.listening_address ?? null} />
-      <CheckRow label="Streaming port" value={String(status?.port ?? status?.configured_port ?? 8765)} />
-      <CheckRow label="Firewall" value={status?.firewall_status ?? null} />
+      {statusLoading ? <CheckSkeleton rows={6} /> : <>
+        <CheckRow label="Server state" value={status?.state ?? null} />
+        <CheckRow label="Private LAN IPv4" value={status?.lan_ipv4 ?? network?.selected?.ipv4 ?? null} />
+        <CheckRow label="Interface" value={status?.interface_display_name ?? network?.selected?.display_name ?? network?.selected?.interface_name ?? null} />
+        <CheckRow label="Listening address" value={status?.listening_address ?? null} />
+        <CheckRow label="Streaming port" value={String(status?.port ?? status?.configured_port ?? 8765)} />
+        <CheckRow label="Firewall" value={status?.firewall_status ?? null} />
+      </>}
       {status?.error && <div className="library-message error" role="alert"><AlertCircle size={16} />{status.error}</div>}
       {testResult && <div className={`library-message ${testResult.reachable ? 'success' : 'error'}`} role="status">{testResult.reachable ? <Check size={16} /> : <AlertCircle size={16} />}{testResult.status_code ? `HTTP ${testResult.status_code} · ` : ''}{testResult.message}</div>}
       <div className="setup-note"><Wifi size={17} /><span>This probe runs on this PC. A Xiaomi Mi Box on the same LAN must still be tested separately.</span></div>
@@ -150,13 +158,14 @@ export function CastCheck({ onNotice }: { onNotice: Notice }) {
   return (
     <div className="setup-checks">
       {(senderError || playbackError) && <div className="library-message error" role="alert"><AlertCircle size={16} />{friendlyError(senderError ?? playbackError)}</div>}
-      {(senderLoading || playbackLoading) && <div className="library-loading"><LoaderCircle size={17} className="spin-icon" /> Reading Cast status…</div>}
-      <CheckRow label="Chrome" value={sender?.chrome_installed ? 'Detected' : 'Not found'} />
-      <CheckRow label="Sender panel" value={sender?.sender_window_state ?? null} />
-      <CheckRow label="Discovery" value={castStateLabel(playback?.cast_state ?? null)} />
-      <CheckRow label="Session" value={sessionStateLabel(playback?.session_state ?? null)} />
-      <CheckRow label="Connected device" value={connectedDevice} />
-      <CheckRow label="Receiver playback" value={playerStateLabel(playback?.player_state ?? null)} />
+      {senderLoading || playbackLoading ? <CheckSkeleton rows={6} /> : <>
+        <CheckRow label="Chrome" value={sender?.chrome_installed ? 'Detected' : 'Not found'} />
+        <CheckRow label="Sender panel" value={sender?.sender_window_state ?? null} />
+        <CheckRow label="Discovery" value={castStateLabel(playback?.cast_state ?? null)} />
+        <CheckRow label="Session" value={sessionStateLabel(playback?.session_state ?? null)} />
+        <CheckRow label="Connected device" value={connectedDevice} />
+        <CheckRow label="Receiver playback" value={playerStateLabel(playback?.player_state ?? null)} />
+      </>}
       {playback?.last_error && <div className="library-message error" role="alert"><AlertCircle size={16} />{playback.last_error}</div>}
       <div className="setup-note"><Monitor size={17} /><span>{connectedDevice ? `Connected to ${connectedDevice}. The sender stays selected until you disconnect.` : 'No device appears until Chrome discovers a Cast receiver on the same LAN.'}</span></div>
       <div className="setup-check-actions">

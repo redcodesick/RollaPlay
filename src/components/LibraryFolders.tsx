@@ -37,7 +37,7 @@ export function FolderRow({
 }
 
 export function FolderList({
-  directories, isLoading, scanProgress, onScan, onCancel, onRemove, onAdd, addDisabled,
+  directories, isLoading, scanProgress, onScan, onCancel, onRemove, onAdd, addDisabled, hideEmptyAdd = false,
 }: {
   directories: MediaDirectory[]
   isLoading: boolean
@@ -47,9 +47,10 @@ export function FolderList({
   onRemove: (directory: MediaDirectory) => void
   onAdd?: () => void
   addDisabled?: boolean
+  hideEmptyAdd?: boolean
 }) {
   if (isLoading) return <div className="library-loading"><LoaderCircle size={17} className="spin-icon" /> Loading folders…</div>
-  if (!directories.length) return <div className="library-empty-folders"><FolderPlus size={19} /><span>No media folders yet.</span>{onAdd && <button onClick={onAdd} disabled={addDisabled}>Add a folder to begin</button>}</div>
+  if (!directories.length) return <div className="library-empty-folders"><FolderPlus size={19} /><span>No media folders yet.</span>{onAdd && !hideEmptyAdd && <button onClick={onAdd} disabled={addDisabled}>Add a folder to begin</button>}</div>
   return (
     <div className="library-folder-list">
       {directories.map((directory) => (

@@ -102,6 +102,15 @@ function MediaCard({
   )
 }
 
+function MediaCardSkeleton() {
+  return (
+    <div className="media-card skeleton" aria-hidden="true">
+      <span className="skeleton-art" />
+      <div className="media-card-info"><span className="skeleton-line" /><span className="skeleton-line short" /></div>
+    </div>
+  )
+}
+
 export default function MediaLibrary({
   searchQuery, selectedMediaIds, onSelectionChange,
 }: {
@@ -335,7 +344,7 @@ export default function MediaLibrary({
 
       <section className="video-library-section" aria-labelledby="videos-title">
         <div className="video-library-heading"><div><h2 id="videos-title">All videos</h2><p>{search ? `Search results for “${search}”` : 'Your indexed video collection'}</p></div><div className="library-toolbar"><div className="library-sort"><label htmlFor="extension-filter">Format</label><select id="extension-filter" value={extension} onChange={(event) => setExtension(event.target.value)}><option value="">All formats</option>{extensions.map((item) => <option key={item} value={item}>{item.toUpperCase()}</option>)}</select><label htmlFor="sort-order">Sort</label><select id="sort-order" value={sortBy} onChange={(event) => setSortBy(event.target.value as SortBy)}><option value="name">Name</option><option value="date">Date added</option><option value="size">File size</option></select></div><div className="library-view-toggle" role="group" aria-label="Library layout"><button className={view === 'grid' ? 'active' : ''} onClick={() => setView('grid')} title="Grid view" aria-label="Grid view"><LayoutGrid size={16} /></button><button className={view === 'list' ? 'active' : ''} onClick={() => setView('list')} title="List view" aria-label="List view"><List size={16} /></button></div></div></div>
-        <div className="library-selection-bar" role="status">
+        <div className={`library-selection-bar ${selectedMediaIds.length ? 'has-selection' : ''}`} role="status">
           <span>{selectedMediaIds.length ? `${selectedMediaIds.length} selected` : 'Select videos using the checkbox on each card, or select a whole folder'}</span>
           <select className="selection-folder" value={folderFilter} onChange={(event) => setFolderFilter(event.target.value)} aria-label="Limit selection to one folder" disabled={!folderOptions.length}>
             <option value="">All folders</option>
@@ -344,15 +353,20 @@ export default function MediaLibrary({
           <button onClick={selectAllVisible} disabled={!visibleFiles.length} title="Select every indexed video in the chosen folder">
             <Check size={14} /> {allVisibleSelected ? 'Unselect all' : `Select all (${visibleFiles.length})`}
           </button>
-          <button onClick={() => void addSelection('play_now')} disabled={!selectedMediaIds.length || !castReady}><Play size={14} /> Play now</button>
-          <button onClick={() => void addSelection('play_next')} disabled={!selectedMediaIds.length}>Play next</button>
-          <button onClick={() => void addSelection('append')} disabled={!selectedMediaIds.length}>Add to queue</button>
-          <input className="selection-playlist-name" value={playlistName} onChange={(event) => setPlaylistName(event.target.value)} placeholder="New playlist name" aria-label="New playlist name" maxLength={120} disabled={!isDesktop || savingPlaylist} />
-          <button onClick={() => void saveSelectionAsPlaylist()} disabled={!selectedMediaIds.length || !playlistName.trim() || !isDesktop || savingPlaylist} title="Create a playlist from the selected videos"><ListMusic size={14} /> Save playlist</button>
-          <span className="selection-hint">Playlists are stored locally; you can rename and play them in the Playlists panel.</span>
-          {selectedMediaIds.length > 0 && <button className="selection-clear" onClick={() => onSelectionChange([])}><X size={14} /> Clear</button>}
+          <div className="selection-actions">
+            <button onClick={() => void addSelection('play_now')} disabled={!selectedMediaIds.length || !castReady}><Play size={14} /> Play now</button>
+            <button onClick={() => void addSelection('play_next')} disabled={!selectedMediaIds.length}>Play next</button>
+            <button onClick={() => void addSelection('append')} disabled={!selectedMediaIds.length}>Add to queue</button>
+            <input className="selection-playlist-name" value={playlistName} onChange={(event) => setPlaylistName(event.target.value)} placeholder="New playlist name" aria-label="New playlist name" maxLength={120} disabled={!isDesktop || savingPlaylist} />
+            <button onClick={() => void saveSelectionAsPlaylist()} disabled={!selectedMediaIds.length || !playlistName.trim() || !isDesktop || savingPlaylist} title="Create a playlist from the selected videos"><ListMusic size={14} /> Save playlist</button>
+            <span className="selection-hint">Playlists are stored locally; you can rename and play them in the Playlists panel.</span>
+            {selectedMediaIds.length > 0 && <button className="selection-clear" onClick={() => onSelectionChange([])}><X size={14} /> Clear</button>}
+          </div>
         </div>
-        {filesError ? <div className="library-empty-results"><AlertCircle size={20} /><strong>Could not load the library</strong><span>Try reopening the application. Your indexed files are stored on this device.</span></div> : isLoadingFiles ? <div className="library-loading"><LoaderCircle size={17} className="spin-icon" /> Loading videos…</div> : files.length ? <div className={`media-grid ${view === 'list' ? 'list-view' : ''}`}>{files.map((media) => <MediaCard key={media.id} media={media} onRefresh={refreshThumbnail} onCast={castVideo} castReady={castReady} isCasting={castingMediaId === media.id} selected={selectedMediaIds.includes(media.id)} onToggleSelect={toggleSelect} />)}</div> : <div className="library-empty-results"><span className="empty-results-icon"><HardDrive size={22} /></span><strong>{search || extension ? 'No matching videos' : 'Your video collection is empty'}</strong><span>{search || extension ? 'Try a different search or format filter.' : 'Add a folder and scan it to see your videos here.'}</span>{!folders.directories.length && <button className="button-primary" onClick={() => void folders.addFolders()} disabled={!isDesktop}><FolderPlus size={16} /> Add media folder</button>}</div>}
+        {filesError ? <div className="library-empty-results"><AlertCircle size={20} /><strong>Could not load the library</strong><span>Try reopening the application. Your indexed files are stored on this device.</span></div>
+          : isLoadingFiles ? <div className={`media-grid ${view === 'list' ? 'list-view' : ''}`} aria-label="Loading videos">{Array.from({ length: 8 }, (_, index) => <MediaCardSkeleton key={index} />)}</div>
+            : visibleFiles.length ? <div className={`media-grid ${view === 'list' ? 'list-view' : ''}`}>{visibleFiles.map((media) => <MediaCard key={media.id} media={media} onRefresh={refreshThumbnail} onCast={castVideo} castReady={castReady} isCasting={castingMediaId === media.id} selected={selectedMediaIds.includes(media.id)} onToggleSelect={toggleSelect} />)}</div>
+              : <div className="library-empty-results"><span className="empty-results-icon"><HardDrive size={22} /></span><strong>{folderFilter ? 'No videos in this folder' : search || extension ? 'No matching videos' : 'Your video collection is empty'}</strong><span>{folderFilter ? 'Choose another folder from the filter above.' : search || extension ? 'Try a different search or format filter.' : 'Add a folder and scan it to see your videos here.'}</span>{!folders.directories.length && <button className="button-primary" onClick={() => void folders.addFolders()} disabled={!isDesktop}><FolderPlus size={16} /> Add media folder</button>}</div>}
       </section>
     </section>
   )

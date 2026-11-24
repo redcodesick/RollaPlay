@@ -54,9 +54,9 @@ export default function MediaServerSettings() {
   const [connectionTest, setConnectionTest] = useState<ConnectionTestResult | null>(null)
   const [pairingToken, setPairingToken] = useState('')
   const [showPairingToken, setShowPairingToken] = useState(false)
-  const { data: status, mutate: refreshStatus } = useSWR(isDesktop ? 'media-server-status' : null, getMediaServerStatus, { refreshInterval: 2000 })
-  const { data: network } = useSWR(isDesktop ? 'media-server-network' : null, getNetworkDiagnostics, { refreshInterval: 10000 })
-  const { data: diagnostics, mutate: refreshDiagnostics } = useSWR(isDesktop ? 'media-server-streams' : null, getMediaStreamDiagnostics, { refreshInterval: 1500 })
+  const { data: status, isLoading: statusLoading, isValidating: statusValidating, mutate: refreshStatus } = useSWR(isDesktop ? 'media-server-status' : null, getMediaServerStatus, { refreshInterval: 2000 })
+  const { data: network, isLoading: networkLoading } = useSWR(isDesktop ? 'media-server-network' : null, getNetworkDiagnostics, { refreshInterval: 10000 })
+  const { data: diagnostics, isLoading: diagnosticsLoading, isValidating: diagnosticsValidating, mutate: refreshDiagnostics } = useSWR(isDesktop ? 'media-server-streams' : null, getMediaStreamDiagnostics, { refreshInterval: 1500 })
 
   useEffect(() => {
     if (status) setPortInput(String(status.configured_port))
@@ -159,9 +159,9 @@ export default function MediaServerSettings() {
     }
   }
 
-  const stateClass = isDesktop ? status?.state ?? 'unknown' : 'unknown'
-  const currentStatusLabel = isDesktop ? statusLabel(status) : 'Windows app only'
-  const currentUrl = status?.media_url_template ?? 'No active LAN endpoint'
+  const stateClass = isDesktop && !statusLoading ? status?.state ?? 'unknown' : statusLoading ? 'checking' : 'unknown'
+  const currentStatusLabel = isDesktop ? statusLoading ? 'Checking server' : statusValidating && !status ? 'Checking server' : statusLabel(status) : 'Windows app only'
+  const currentUrl = status?.media_url_template ?? (statusLoading ? 'Checking LAN endpoint…' : 'No active LAN endpoint')
   const streams = diagnostics?.active_streams ?? []
   const recentRequests = diagnostics?.recent_requests ?? []
 
@@ -182,11 +182,11 @@ export default function MediaServerSettings() {
       {status?.error && <div className={`library-message ${status.state === 'running' ? 'success' : 'error'}`} role="status"><AlertCircle size={16} />{status.error}</div>}
 
       <div className="server-info-grid">
-        <article className="server-info-card"><span><Network size={15} /> LAN IPv4</span><strong>{status?.lan_ipv4 ?? network?.selected?.ipv4 ?? 'Unavailable'}</strong><small>{status?.interface_display_name ?? network?.selected?.display_name ?? network?.selected?.interface_name ?? 'No active private IPv4 interface'}</small></article>
-        <article className="server-info-card"><span><Server size={15} /> LISTENING ADDRESS</span><strong>{status?.listening_address ?? 'Not listening'}</strong><small>Selected adapter only · not bound to all interfaces</small></article>
-        <article className="server-info-card"><span><Wifi size={15} /> STREAMING PORT</span><strong>{status?.port ?? status?.configured_port ?? 8765}</strong><small>{status?.port && status.port !== status.configured_port ? `Configured ${status.configured_port}; fallback selected` : 'Default port is 8765'}</small></article>
-        <article className="server-info-card"><span><ShieldCheck size={15} /> FIREWALL</span><strong>{status?.firewall_status ?? 'Unknown'}</strong><small>Remote firewall access requires a second-device test.</small></article>
-        <article className="server-info-card"><span><Play size={15} /> ACTIVE STREAMS</span><strong>{status?.active_streams ?? 0}</strong><small>Uptime {formatUptime(status?.uptime_seconds ?? null)}</small></article>
+        <article className="server-info-card"><span><Network size={15} /> LAN IPv4</span><strong>{status?.lan_ipv4 ?? network?.selected?.ipv4 ?? (statusLoading || networkLoading ? '—' : 'Unavailable')}</strong><small>{status?.interface_display_name ?? network?.selected?.display_name ?? network?.selected?.interface_name ?? (networkLoading ? 'Checking interfaces…' : 'No active private IPv4 interface')}</small></article>
+        <article className="server-info-card"><span><Server size={15} /> LISTENING ADDRESS</span><strong>{status?.listening_address ?? (statusLoading ? '—' : 'Not listening')}</strong><small>Selected adapter only · not bound to all interfaces</small></article>
+        <article className="server-info-card"><span><Wifi size={15} /> STREAMING PORT</span><strong>{status?.port ?? status?.configured_port ?? (statusLoading ? '—' : 8765)}</strong><small>{status?.port && status.port !== status.configured_port ? `Configured ${status.configured_port}; fallback selected` : 'Default port is 8765'}</small></article>
+        <article className="server-info-card"><span><ShieldCheck size={15} /> FIREWALL</span><strong>{status?.firewall_status ?? (statusLoading ? '—' : 'Unknown')}</strong><small>Remote firewall access requires a second-device test.</small></article>
+        <article className="server-info-card"><span><Play size={15} /> ACTIVE STREAMS</span><strong>{status?.active_streams ?? (statusLoading ? '—' : 0)}</strong><small>Uptime {statusLoading ? '—' : formatUptime(status?.uptime_seconds ?? null)}</small></article>
       </div>
       <details className="server-network-interfaces">
         <summary>Detected interfaces ({network?.interfaces.length ?? 0})</summary>
@@ -205,22 +205,29 @@ export default function MediaServerSettings() {
           </div>
         </div>
         <div className="server-control-row">
-          <label htmlFor="server-port">Port</label>
-          <input id="server-port" type="number" min={1024} max={65535} step={1} value={portInput} onChange={(event) => setPortInput(event.target.value)} disabled={!isDesktop || isWorking} />
-          <button className="folder-action" onClick={savePort} disabled={!isDesktop || isWorking}>Save port</button>
-          <span className="server-control-spacer" />
-          <button className="folder-action" onClick={() => runAction(startMediaServer, 'Start request sent.')} disabled={!isDesktop || isWorking || status?.state === 'running'}><Play size={14} /> Start</button>
-          <button className="folder-action" onClick={() => runAction(stopMediaServer, 'Server stopped.')} disabled={!isDesktop || isWorking || status?.state === 'stopped'}><Square size={13} /> Stop</button>
-          <button className="folder-action" onClick={() => runAction(restartMediaServer, 'Server restart requested.')} disabled={!isDesktop || isWorking}><RotateCw size={14} /> Restart</button>
-          <button className="button-primary server-test-button" onClick={runConnectionTest} disabled={!isDesktop || isWorking}><Wifi size={15} /> Test connection</button>
+          <div className="server-control-groups">
+            <div className="server-port-group">
+              <label htmlFor="server-port">Port</label>
+              <input id="server-port" type="number" min={1024} max={65535} step={1} value={portInput} onChange={(event) => setPortInput(event.target.value)} disabled={!isDesktop || isWorking} />
+              <button className="folder-action" onClick={savePort} disabled={!isDesktop || isWorking}>Save port</button>
+            </div>
+            <div className="server-actions-group">
+              <button className="folder-action" onClick={() => runAction(startMediaServer, 'Start request sent.')} disabled={!isDesktop || isWorking || status?.state === 'running'}><Play size={14} /> Start</button>
+              <button className="folder-action" onClick={() => runAction(stopMediaServer, 'Server stopped.')} disabled={!isDesktop || isWorking || status?.state === 'stopped'}><Square size={13} /> Stop</button>
+              <button className="folder-action" onClick={() => runAction(restartMediaServer, 'Server restart requested.')} disabled={!isDesktop || isWorking}><RotateCw size={14} /> Restart</button>
+              <button className="button-primary server-test-button" onClick={runConnectionTest} disabled={!isDesktop || isWorking}><Wifi size={15} /> Test connection</button>
+            </div>
+          </div>
         </div>
         {connectionTest && <p className={`connection-test-result ${connectionTest.reachable ? 'passed' : 'failed'}`}>{connectionTest.status_code ? `HTTP ${connectionTest.status_code} · ` : ''}{connectionTest.message}</p>}
       </div>
 
-      <div className="server-diagnostics-card">
+      <div className={`server-diagnostics-card ${diagnosticsValidating ? 'is-refreshing' : ''}`}>
         <div className="server-controls-heading"><div><h3>Streaming diagnostics</h3><p>Recent request records contain no access tokens.</p></div><button className="folder-action" onClick={() => runAction(clearMediaStreamDiagnostics, 'Diagnostic history cleared.')} disabled={!isDesktop || isWorking}><Trash2 size={14} /> Clear history</button></div>
-        {streams.length ? <div className="stream-diagnostic-list">{streams.map((stream) => <article className="stream-diagnostic-row" key={stream.stream_id}><div><strong>{stream.filename}</strong><span>{stream.client_ip} · ID {stream.media_id}</span></div><span>{formatBytes(stream.bytes_transferred)}</span><span>{stream.duration_seconds}s</span><span className="stream-active-status">{stream.request_status}</span></article>)}</div> : <div className="server-empty-diagnostics">No active streams.</div>}
-        {recentRequests.length > 0 && <details className="recent-requests"><summary>Recent requests ({recentRequests.length})</summary><div className="stream-diagnostic-list">{recentRequests.map((request) => <article className="stream-diagnostic-row" key={request.stream_id}><div><strong>{request.filename}</strong><span>{request.client_ip} · ID {request.media_id}</span></div><span>{formatBytes(request.bytes_transferred)}</span><span>{request.duration_seconds}s</span><span>{request.request_status}</span></article>)}</div></details>}
+        {diagnosticsLoading ? <div className="diagnostics-loading" aria-hidden="true"><span className="skeleton-line" /><span className="skeleton-line short" /><span className="skeleton-line" /></div>
+          : streams.length ? <div className="stream-diagnostic-list">{streams.map((stream) => <article className="stream-diagnostic-row" key={stream.stream_id}><div><strong>{stream.filename}</strong><span>{stream.client_ip} · ID {stream.media_id}</span></div><span>{formatBytes(stream.bytes_transferred)}</span><span>{stream.duration_seconds}s</span><span className="stream-active-status">{stream.request_status}</span></article>)}</div>
+            : <div className="server-empty-diagnostics">No active streams.</div>}
+        {!diagnosticsLoading && recentRequests.length > 0 && <details className="recent-requests"><summary>Recent requests ({recentRequests.length})</summary><div className="stream-diagnostic-list">{recentRequests.map((request) => <article className="stream-diagnostic-row" key={request.stream_id}><div><strong>{request.filename}</strong><span>{request.client_ip} · ID {request.media_id}</span></div><span>{formatBytes(request.bytes_transferred)}</span><span>{request.duration_seconds}s</span><span>{request.request_status}</span></article>)}</div></details>}
       </div>
 
       <div className="server-network-note"><ShieldCheck size={15} /><span>Administrative controls are Tauri-only. The HTTP listener binds only to the selected private IPv4 address; LAN media requests use an authenticated bearer token. Firewall acceptance is not inferred by the local probe.</span></div>

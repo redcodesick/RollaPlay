@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import useSWR from 'swr'
 import {
-  AlertCircle, Cast, Check, LoaderCircle, RefreshCw, Tv, X,
+  AlertCircle, Cast, Check, LoaderCircle, Monitor, RefreshCw, Speaker, Tv, X,
 } from 'lucide-react'
 import {
   castDeviceName, castRequestSession, castSendControl, castStateLabel, discoverCastDevices,
@@ -23,10 +23,25 @@ function toneLabel(tone: DeviceTone) {
   switch (tone) {
     case 'playing': return 'PLAYING HERE'
     case 'connected': return 'CONNECTED'
-    case 'connecting': return 'PICK IN CHROME'
+    case 'connecting': return 'CHOOSE IN CHROME'
     case 'failed': return 'FAILED'
     default: return 'AVAILABLE'
   }
+}
+
+function deviceLabel(device: CastDevice) {
+  const name = device.name?.trim()
+  if (name && !/^(cast|chromecast|google cast|tv|television|device|receiver)(\s+(device|receiver|0x[0-9a-f]+))?$/i.test(name)) return name
+  const model = device.model?.trim()
+  if (model && model.toLocaleLowerCase() !== name?.toLocaleLowerCase()) return `${model} receiver`
+  return `Receiver ${device.id.slice(0, 8)}`
+}
+
+function DeviceIcon({ device }: { device: CastDevice }) {
+  const label = `${device.name ?? ''} ${device.model ?? ''}`.toLocaleLowerCase()
+  if (/speaker|audio|soundbar/i.test(label)) return <Speaker size={18} />
+  if (/display|monitor|desktop|laptop/i.test(label)) return <Monitor size={18} />
+  return <Tv size={18} />
 }
 
 export default function ConnectPanel({
@@ -46,6 +61,7 @@ export default function ConnectPanel({
 
   const connectedDevice = castDeviceName(playback)
   const receiverPlaying = connectedDevice && playback?.player_state === 'PLAYING'
+  const receiverPaused = connectedDevice && playback?.player_state === 'PAUSED'
 
   useEffect(() => { pendingRef.current = pending }, [pending])
 
@@ -169,9 +185,9 @@ export default function ConnectPanel({
             <strong>{connectedDevice}</strong>
             <span>Google Cast · {castStateLabel(playback?.cast_state)}</span>
           </div>
-          <span className={`connect-indicator ${receiverPlaying ? 'live' : ''}`}>
+          <span className={`connect-indicator ${receiverPlaying ? 'live' : receiverPaused ? 'paused' : ''}`}>
             {receiverPlaying && <i />}
-            {receiverPlaying ? 'PLAYING HERE' : 'READY'}
+            {receiverPlaying ? 'PLAYING HERE' : receiverPaused ? 'PAUSED' : 'READY'}
           </span>
           <button className="connect-switch" onClick={() => void switchDevice()} title="Disconnect to choose another receiver">SWITCH</button>
         </div>
@@ -210,13 +226,14 @@ export default function ConnectPanel({
               key={device.id}
               role="listitem"
               className={`connect-device tone-${tone} ${active ? 'active' : ''}`}
+              aria-current={active ? 'true' : undefined}
               onClick={() => void connect(device)}
               disabled={active || connecting}
             >
-              <span className="connect-device-icon"><Tv size={18} /></span>
+              <span className="connect-device-icon"><DeviceIcon device={device} /></span>
               <span className="connect-device-copy">
-                <strong>{device.name}</strong>
-                <small>{device.model || 'Google Cast'} · Google Cast</small>
+                <strong title={device.name}>{deviceLabel(device)}</strong>
+                <small>{device.model || 'Google Cast'} · {device.address || 'Google Cast'}</small>
               </span>
               <span className={`connect-device-state state-${tone}`}>
                 {tone === 'connecting' && <LoaderCircle size={12} className="spin-icon" />}

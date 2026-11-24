@@ -46,6 +46,7 @@ export default function PlaylistManager({
   const [renaming, setRenaming] = useState<number | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [dragItem, setDragItem] = useState<number | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [indexingVideos, setIndexingVideos] = useState(false)
 
@@ -268,28 +269,39 @@ export default function PlaylistManager({
     const cover = covers[playlist.id]
     return (
       <article key={playlist.id} className={`playlist-card ${featured ? 'playlist-card-featured' : ''} ${selected ? 'selected' : ''}`}>
-        <div
-          className={`playlist-cover tone-${coverTone(playlist.id)}`}
-          role="button"
-          tabIndex={0}
-          aria-label={`Open ${playlist.name}`}
-          title={`Open ${playlist.name}`}
-          onClick={() => openPlaylist(playlist)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault()
-              openPlaylist(playlist)
-            }
-          }}
-        >
+        <div className={`playlist-cover tone-${coverTone(playlist.id)}`}>
           {cover ? <img src={cover} alt="" /> : <Disc3 size={featured ? 38 : 26} strokeWidth={1.4} />}
           <button
+            className="playlist-cover-open"
+            onClick={() => openPlaylist(playlist)}
+            aria-label={`Open ${playlist.name}`}
+            title={`Open ${playlist.name}`}
+          />
+          <button
             className="playlist-cover-play"
-            onClick={(event) => { event.stopPropagation(); playWholePlaylist(playlist) }}
+            onClick={() => playWholePlaylist(playlist)}
             disabled={busy || !playlist.item_count || !available}
             title="Play whole playlist"
             aria-label={`Play ${playlist.name}`}
           ><Play size={featured ? 20 : 15} fill="currentColor" /></button>
+          {confirmDelete === playlist.id && <div className="playlist-delete-confirm" role="group" aria-label={`Confirm deleting ${playlist.name}`}>
+            <span>Delete playlist?</span>
+            <div>
+              <button onClick={() => {
+                setConfirmDelete(null)
+                debugLog('playlists', 'button_click', { control: 'delete_playlist', playlistId: playlist.id })
+                void guard(async () => {
+                  await deletePlaylist(playlist.id)
+                  if (selectedPlaylist === playlist.id) {
+                    preferredRefreshRef.current = null
+                    setSelectedPlaylist(null)
+                  }
+                  onNotice(`Playlist “${playlist.name}” deleted. Your files were not changed.`, 'info')
+                })
+              }} disabled={busy}>Delete</button>
+              <button onClick={() => setConfirmDelete(null)} disabled={busy}>Cancel</button>
+            </div>
+          </div>}
         </div>
         <button className="playlist-open" onClick={() => openPlaylist(playlist)}>
           <span><strong>{playlist.name}</strong><small>{playlist.item_count} items · {formatDuration(playlist.duration_seconds)}</small></span>
@@ -301,17 +313,7 @@ export default function PlaylistManager({
             await queueAddPlaylist(playlist.id, 'append')
             onNotice(`“${playlist.name}” added to the queue.`, 'success')
           })} disabled={busy} title="Add playlist to queue" aria-label={`Add ${playlist.name} to queue`}><Plus size={13} /></button>
-          <button onClick={() => {
-            debugLog('playlists', 'button_click', { control: 'delete_playlist', playlistId: playlist.id })
-            void guard(async () => {
-              await deletePlaylist(playlist.id)
-              if (selectedPlaylist === playlist.id) {
-                preferredRefreshRef.current = null
-                setSelectedPlaylist(null)
-              }
-              onNotice(`Playlist “${playlist.name}” deleted. Your files were not changed.`, 'info')
-            })
-          }} disabled={busy} title="Delete playlist" aria-label={`Delete ${playlist.name}`}><Trash2 size={13} /></button>
+          <button onClick={() => setConfirmDelete(playlist.id)} disabled={busy} title="Delete playlist" aria-label={`Delete ${playlist.name}`}><Trash2 size={13} /></button>
         </div>
         {renaming === playlist.id && <form className="playlist-rename" onSubmit={(event) => {
           event.preventDefault()
@@ -450,7 +452,7 @@ export default function PlaylistManager({
           <div className="playlist-track-head"><span>#</span><span /><span>TITLE</span><span><Clock3 size={12} /> LENGTH</span><span /></div>
           <div className="playlist-items">{items.map((item, index) => (
             <div key={item.id}
-              className={`playlist-item ${item.availability_state !== 'available' ? 'missing' : ''} ${dragItem === item.id ? 'dragging' : ''}`}
+              className={`playlist-item ${item.availability_state !== 'available' ? 'missing' : ''} ${snapshot?.current_media_file_id === item.media_file_id ? 'is-current' : ''} ${dragItem === item.id ? 'dragging' : ''}`}
               draggable
               onDragStart={() => setDragItem(item.id)}
               onDragEnd={() => setDragItem(null)}
@@ -466,8 +468,12 @@ export default function PlaylistManager({
               }}
             >
               <span className="playlist-item-index"><GripVertical size={12} className="playlist-grip" />{index + 1}</span>
-              <span className="playlist-item-art"><Disc3 size={14} /></span>
-              <span className="playlist-item-copy" title={item.filename}>{item.filename}{item.availability_state !== 'available' && <em> · missing</em>}</span>
+              <span className="playlist-item-art">
+                {thumbnailByMediaId.has(item.media_file_id)
+                  ? <img src={convertFileSrc(thumbnailByMediaId.get(item.media_file_id)!)} alt="" />
+                  : <Disc3 size={14} />}
+              </span>
+              <span className="playlist-item-copy" title={item.filename}>{item.filename}{item.availability_state !== 'available' && <em> · missing</em>}{snapshot?.current_media_file_id === item.media_file_id && <em> · playing</em>}</span>
               <span className="playlist-item-time">{formatDuration(item.duration_seconds)}</span>
               <div className="playlist-item-actions">
                 <button onClick={() => void guard(async () => playMediaNow(item.media_file_id))} disabled={busy} title="Play now" aria-label={`Play ${item.filename}`}><Play size={13} /></button>

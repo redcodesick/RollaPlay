@@ -35,9 +35,12 @@ but harmless.
 ```powershell
 pnpm install
 pnpm build                 # TypeScript typecheck + Vite bundle
-pnpm tauri build           # release app + NSIS/MSI installers
+pnpm test                  # updater tests
 cargo test --manifest-path src-tauri/Cargo.toml
+pnpm tauri build           # release app + NSIS/MSI installers
 ```
+
+For updater artifacts, set `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` before `pnpm tauri build`; `bundle.createUpdaterArtifacts` then emits `.sig` files beside the installers. See `docs/updater-release-guide.md`. Never commit or print the key or password.
 
 `cargo`/`rustc` are not on the PATH of already-open shells. New terminals pick
 them up; for the current session run:
@@ -74,11 +77,17 @@ An app icon set was generated in `src-tauri/icons/` (the archive omitted it) and
 ## Verified
 
 - `pnpm build`: passes.
-- `cargo test --manifest-path src-tauri/Cargo.toml`: 43 passed, 1 ignored
+- `pnpm test`: 12 updater tests pass.
+- `cargo test --manifest-path src-tauri/Cargo.toml`: 82 passed, 0 failed, 1 ignored
   (the ignored test needs `WMS_TEST_VIDEO`).
-- `pnpm tauri build`: produces the NSIS and MSI installers below.
+- Signed `pnpm tauri build --ci`: produces the NSIS and MSI installers and their
+  `.sig` files below. Attach only the installers, signatures and generated
+  `latest.json` to GitHub releases; screenshots stay in `docs/screenshots/` for
+  the README gallery and are not release assets.
 
 ```
-src-tauri/target/release/bundle/nsis/RollaPlay_0.1.0_x64-setup.exe
-src-tauri/target/release/bundle/msi/RollaPlay_0.1.0_x64_en-US.msi
+src-tauri/target/release/bundle/nsis/RollaPlay_0.3.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/RollaPlay_0.3.0_x64-setup.exe.sig
+src-tauri/target/release/bundle/msi/RollaPlay_0.3.0_x64_en-US.msi
+src-tauri/target/release/bundle/msi/RollaPlay_0.3.0_x64_en-US.msi.sig
 ```
