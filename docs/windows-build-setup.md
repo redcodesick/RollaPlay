@@ -86,8 +86,8 @@ An app icon set was generated in `src-tauri/icons/` (the archive omitted it) and
   the README gallery and are not release assets.
 
 ```
-src-tauri/target/release/bundle/nsis/RollaPlay_0.3.0_x64-setup.exe
-src-tauri/target/release/bundle/nsis/RollaPlay_0.3.0_x64-setup.exe.sig
-src-tauri/target/release/bundle/msi/RollaPlay_0.3.0_x64_en-US.msi
-src-tauri/target/release/bundle/msi/RollaPlay_0.3.0_x64_en-US.msi.sig
+src-tauri/target/release/bundle/nsis/RollaPlay_0.3.1_x64-setup.exe
+src-tauri/target/release/bundle/nsis/RollaPlay_0.3.1_x64-setup.exe.sig
+src-tauri/target/release/bundle/msi/RollaPlay_0.3.1_x64_en-US.msi
+src-tauri/target/release/bundle/msi/RollaPlay_0.3.1_x64_en-US.msi.sig
 ```

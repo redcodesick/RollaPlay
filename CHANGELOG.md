@@ -2,6 +2,17 @@
 
 All notable changes to RollaPlay are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1] - 2026-11-24
+
+### Fixed
+
+- Release tag verification now checks `src-tauri/Cargo.lock` and `src/version.ts` in addition to `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`, so a partially bumped tag fails before a release is created.
+- The release guide now names all five synchronized version declarations and uses the GitHub remote for the example tag push.
+
+### Notes
+
+- Controlled updater E2E test release. No updater behavior, backend, Tauri contract, UI behavior or persisted data format changed.
+
 ## [0.3.0] - 2026-11-24
 
 ### Changed

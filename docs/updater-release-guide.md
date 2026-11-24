@@ -78,12 +78,12 @@ Losing the private key or password is unrecoverable for future updates: the embe
 3. Commit and push the release commit to the default branch.
 4. Create and push a stable tag:
    ```powershell
-   git tag v0.3.0
-   git push origin v0.3.0
+   git tag v0.3.1
+   git push github v0.3.1
    ```
-   Never tag a prerelease with `v*`; the workflow rejects tags containing `-`.
+   Use the GitHub remote (`github` on this machine); the local `origin` points to a backup repository. Never tag a prerelease with `v*`; the workflow rejects tags containing `-`.
 5. `.github/workflows/release.yml` verifies the tag and all five version declarations (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` and `src/version.ts`), checks the signing secrets, runs the tests, builds signed NSIS and MSI installers, creates a GitHub Release with generated notes, writes `latest.json` from the actual `.exe`, `.msi` and `.sig` files, uploads it, and verifies the published asset list.
-6. Open **About → Software updates → Check for Updates** in an installed older build and complete the real update test before calling the release production-ready.
+6. Open **About → Software updates → Check for Updates** in an installed older build and complete the real update test before calling the release production-ready. For 0.3.1, follow `docs/updater-e2e-0.3.1.md` with expected results and troubleshooting.
 
 The workflow uses `${{ github.repository }}` to build URLs, so it does not depend on the developer machine's local `origin` path.
 
