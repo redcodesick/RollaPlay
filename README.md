@@ -11,9 +11,52 @@ RollaPlay (the RockNRolla Media Station) is a local-first Tauri 2 desktop app fo
 - **Downloader:** paste a YouTube video or playlist link, pick a folder, and get Cast-friendly H.264/AAC MP4 files that are indexed into the library automatically. Optional HD mode fetches FFmpeg on first use.
 - **Polished shell:** collapsible sidebar (preference persisted), Home playlist shelf, real Recently added and History pages, an About dialog with build details, and an exit confirmation that still shuts down cleanly.
 
+## Screenshots
+
+Captured from the native Windows app after the 0.2.0 redesign. Click any image to open the full-size capture.
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="docs/screenshots/home.png"><img src="docs/screenshots/home.png" width="480" alt="RollaPlay Home screen"></a><br>
+      <strong>Home</strong> — hero actions, Continue Playing, real Recently added, and playlist shelf.
+    </td>
+    <td align="center" width="50%">
+      <a href="docs/screenshots/library.png"><img src="docs/screenshots/library.png" width="480" alt="RollaPlay Library poster grid"></a><br>
+      <strong>Library</strong> — poster grid, compact Cast action, search, sort, filter, and thumbnail controls.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <a href="docs/screenshots/playlist.png"><img src="docs/screenshots/playlist.png" width="480" alt="RollaPlay playlist detail"></a><br>
+      <strong>Playlist</strong> — generated artwork, duration, track list, and context actions.
+    </td>
+    <td align="center" width="50%">
+      <a href="docs/screenshots/connect.png"><img src="docs/screenshots/connect.png" width="480" alt="RollaPlay Connect receiver picker"></a><br>
+      <strong>Connect</strong> — app-owned picker listing only real discovered receivers.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <a href="docs/screenshots/downloader.png"><img src="docs/screenshots/downloader.png" width="480" alt="RollaPlay Downloader"></a><br>
+      <strong>Downloader</strong> — URL, destination, quality choice, and real tool/progress status.
+    </td>
+    <td align="center" width="50%">
+      <a href="docs/screenshots/setup.png"><img src="docs/screenshots/setup.png" width="480" alt="RollaPlay first-run setup"></a><br>
+      <strong>Setup</strong> — guided folders, scan, discovery, and finish steps.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <a href="docs/screenshots/about.png"><img src="docs/screenshots/about.png" width="480" alt="RollaPlay About dialog"></a><br>
+      <strong>About</strong> — shared Rolla mark, build details, and no runtime font services.
+    </td>
+  </tr>
+</table>
+
 ## Architecture
 
-- **Desktop UI:** React, TypeScript, Vite, Lucide, dark media-center layout styled in `src/styles.css`.
+- **Desktop UI:** React, TypeScript, Vite, Lucide, dark media-center layout styled in `src/styles.css` and tokenized in `src/redesign.css`.
 - **Native backend:** Tauri 2 commands, SQLite in the app-local data directory (`app.windowsmediastation.local`), and Tokio-backed blocking tasks for filesystem scans and Windows Shell work.
 - **Media indexing:** recursive, non-symlink-following scans of approved folders. Paths, sizes, and high-resolution modification timestamps drive incremental updates. Folder removal and missing files never delete physical media or playlist references.
 - **Thumbnail engine:** Windows `IShellItemImageFactory::GetImage` with `SIIGBF_THUMBNAILONLY`. COM and Shell extraction run away from the UI thread. Generated JPEGs are in `$LOCALAPPDATA/app.windowsmediastation.local/thumbnails`; SQLite stores source metadata, cache path, dimensions, quality, status, and errors—not image bytes. Unsupported or unavailable Shell thumbnail providers yield a generic card and an actionable error.
