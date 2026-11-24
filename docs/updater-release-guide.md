@@ -83,7 +83,7 @@ Losing the private key or password is unrecoverable for future updates: the embe
    ```
    Use the GitHub remote (`github` on this machine); the local `origin` points to a backup repository. Never tag a prerelease with `v*`; the workflow rejects tags containing `-`.
 5. `.github/workflows/release.yml` verifies the tag and all five version declarations (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` and `src/version.ts`), checks the signing secrets, runs the tests, builds signed NSIS and MSI installers, creates a GitHub Release with generated notes, writes `latest.json` from the actual `.exe`, `.msi` and `.sig` files, uploads it, and verifies the published asset list.
-6. Open **About → Software updates → Check for Updates** in an installed older build and complete the real update test before calling the release production-ready. For 0.3.1, follow `docs/updater-e2e-0.3.1.md` with expected results and troubleshooting.
+6. Open **About → Software updates → Check for Updates** in an installed older build and complete the real update test before calling a new release production-ready. The 0.3.0 → 0.3.1 flow has passed; its recorded results are in `docs/updater-e2e-0.3.1.md`.
 
 The workflow uses `${{ github.repository }}` to build URLs, so it does not depend on the developer machine's local `origin` path.
 
@@ -114,9 +114,9 @@ msi/RollaPlay_<version>_x64_en-US.msi.sig
 
 Clear the two environment variables after the build. Do not include their values in issue reports.
 
-## Manual E2E checklist before production-ready
+## Manual E2E checklist for future releases
 
-A release is not fully validated until this has been done with a real GitHub Release:
+The official updater is production-validated for the signed 0.3.0 → 0.3.1 NSIS flow on Windows. Repeat this checklist with a real GitHub Release before calling any later release production-ready:
 
 1. Install the previous signed version from GitHub.
 2. Add real folders/videos, create a playlist, set a thumbnail preference, and record the installed version.

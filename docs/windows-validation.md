@@ -203,6 +203,14 @@ Build/test results for the current 0.1.1 run: `cargo test --manifest-path src-ta
 - **Screenshots (PASS).** Seven README gallery captures were recaptured from the running native Windows app into `docs/screenshots/` at 1326×939 using UI Automation navigation and per-window capture; each file was OCR-checked for its intended screen and absence of modal overlays. No mock or fabricated library/cast data was used.
 - **Release assets (PASS).** The seven screenshot images were removed from the `v0.2.0` GitHub release; only the two installers remain as uploaded assets, and the release body no longer embeds raw screenshot links. Future releases keep screenshots in the README only.
 
+## 0.3.1 signed updater verification
+
+- **Published release (PASS).** `v0.3.1` was created from stable tag `3995c11` and published with signed NSIS/MSI installers, their `.sig` files and a `latest.json` manifest pointing to those exact artifacts.
+- **Version synchronization (PASS).** All five declarations (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `src/version.ts`) were verified as `0.3.1` before tagging.
+- **Automated checks (PASS).** 12 frontend tests, the TypeScript/Vite production build, 82 Rust tests and Clippy completed successfully before release.
+- **Real updater E2E (PASS).** Maintainer confirmed the signed 0.3.0 NSIS → 0.3.1 update, manual check/download/install, explicit restart/reopen, version `0.3.1` and preservation of library, playlists, history, settings and SQLite data. Details: `docs/updater-e2e-0.3.1.md`.
+- **Scope note.** MSI parity and deliberate negative/error-path checks were not recorded in this pass and remain recommended for later releases.
+
 ## Run notes
 
 For each item, record **Pass / Fail / Blocked**, steps and expected/actual result, relevant logs, and a screenshot or database query when useful. A blocked test is not a pass. Run on real Windows Shell providers; do not substitute a simulated thumbnail provider.

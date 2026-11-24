@@ -12,6 +12,7 @@ All notable changes to RollaPlay are documented here. The format follows [Keep a
 ### Notes
 
 - Controlled updater E2E test release. No updater behavior, backend, Tauri contract, UI behavior or persisted data format changed.
+- E2E validation completed after publication: signed 0.3.0 → 0.3.1 update, restart/reopen and data preservation all passed on Windows.
 
 ## [0.3.0] - 2026-11-24
 
