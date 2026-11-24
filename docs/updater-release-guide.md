@@ -82,7 +82,7 @@ Losing the private key or password is unrecoverable for future updates: the embe
    git push origin v0.3.0
    ```
    Never tag a prerelease with `v*`; the workflow rejects tags containing `-`.
-5. `.github/workflows/release.yml` verifies the tag and all version declarations, checks the signing secrets, runs the tests, builds signed NSIS and MSI installers, creates a GitHub Release with generated notes, writes `latest.json` from the actual `.exe`, `.msi` and `.sig` files, uploads it, and verifies the published asset list.
+5. `.github/workflows/release.yml` verifies the tag and all five version declarations (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` and `src/version.ts`), checks the signing secrets, runs the tests, builds signed NSIS and MSI installers, creates a GitHub Release with generated notes, writes `latest.json` from the actual `.exe`, `.msi` and `.sig` files, uploads it, and verifies the published asset list.
 6. Open **About → Software updates → Check for Updates** in an installed older build and complete the real update test before calling the release production-ready.
 
 The workflow uses `${{ github.repository }}` to build URLs, so it does not depend on the developer machine's local `origin` path.
