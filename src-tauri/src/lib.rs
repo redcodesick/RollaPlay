@@ -2625,6 +2625,9 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("media");
         fs::create_dir_all(&root).unwrap();
+        // Windows CI exposes TEMP as an 8.3 short path. Store the same canonical
+        // form the scanner produces so path assertions compare like with like.
+        let root = canonicalize_media_path(&root).unwrap();
         let database = Arc::new(Mutex::new(open_database(&temporary.path().join("data")).unwrap()));
         let path = root.to_string_lossy().into_owned();
         let directory_id = database
