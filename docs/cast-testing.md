@@ -84,6 +84,7 @@ These tests were executed in this packaged-app validation run: 60 passed, 0 fail
 
 ## Known limitations to document when testing
 
+- DLNA/UPnP playback and LG webOS SSAP control are tracked separately in [docs/dlna-lg-validation.md](dlna-lg-validation.md). That work is not part of the validated 0.3.x Cast release until the hardware checklist passes.
 - The Default Media Receiver plays MP4/M4V/WebM/MKV containers; codec support depends on the Mi Box hardware (H.264/VP9 + AAC are safe). AVI/WMV/MPEG-PS are rejected before casting.
 - Connect lists real receivers from LAN mDNS, but the official Web Sender SDK has no supported API to select a receiver by id. Choosing a device opens Chrome's Cast dialog with the name shown as guidance; the actual connection is still made by that dialog, and no success is reported until a real session event arrives.
 - Cast discovery requires mDNS to be permitted between the PC and the Mi Box (AP isolation must be off).

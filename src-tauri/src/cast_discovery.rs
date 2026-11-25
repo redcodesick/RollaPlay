@@ -10,7 +10,7 @@
 //! logged or persisted.
 
 use crate::network::{select_lan_address, LanAddress};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     net::{Ipv4Addr, UdpSocket},
@@ -23,7 +23,7 @@ const CAST_SERVICE: &str = "_googlecast._tcp.local.";
 // mDNS responses with several TXT records can exceed the old 4 KiB buffer.
 const MAX_PACKET: usize = 9216;
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CastDevice {
     /// Stable device id advertised by the receiver, or its instance name.
     pub id: String,
@@ -35,8 +35,24 @@ pub struct CastDevice {
     pub address: String,
     /// Cast channel port from the SRV record.
     pub port: u16,
-    /// Discovery transport; always `mDNS` for this implementation.
+    /// Discovery transport: `mDNS` for Google Cast, `SSDP` for DLNA renderers.
     pub source: String,
+    /// Which playback transport this device uses: `cast` or `dlna`.
+    #[serde(default = "default_transport")]
+    pub transport: String,
+    /// AVTransport SOAP control URL for DLNA renderers.
+    #[serde(default)]
+    pub avtransport_url: Option<String>,
+    /// RenderingControl SOAP control URL for DLNA renderers.
+    #[serde(default)]
+    pub rendering_url: Option<String>,
+    /// Original SSDP device description URL, used only for diagnostics.
+    #[serde(default)]
+    pub description_url: Option<String>,
+}
+
+fn default_transport() -> String {
+    "cast".to_string()
 }
 
 #[derive(Default)]
@@ -167,6 +183,10 @@ pub fn discover(timeout: Duration) -> Result<Vec<CastDevice>, String> {
                 address,
                 port: entry.port.unwrap_or(8009),
                 source: "mDNS".to_string(),
+                transport: default_transport(),
+                avtransport_url: None,
+                rendering_url: None,
+                description_url: None,
             })
         })
         .collect();

@@ -7,6 +7,7 @@
 
 use crate::{
     cast_sender::{CastEventReport, CastSenderManager},
+    dlna::{DlnaManager, DlnaPlaybackRequest},
     media_server::MediaServerManager,
     playlist::{CastStatusEvent, EngineEffect, PlaybackEngine, PlaybackSnapshot},
 };
@@ -19,6 +20,7 @@ pub struct PlaybackOrchestrator {
     engine: PlaybackEngine,
     server: MediaServerManager,
     cast: CastSenderManager,
+    dlna: DlnaManager,
 }
 
 impl PlaybackOrchestrator {
@@ -27,8 +29,9 @@ impl PlaybackOrchestrator {
         engine: PlaybackEngine,
         server: MediaServerManager,
         cast: CastSenderManager,
+        dlna: DlnaManager,
     ) -> Self {
-        Self { app, engine, server, cast }
+        Self { app, engine, server, cast, dlna }
     }
 
     pub fn engine(&self) -> &PlaybackEngine {
@@ -50,6 +53,23 @@ impl PlaybackOrchestrator {
     /// Called for every `cast-playback-event` emitted by the real Cast bridge.
     /// This is the only path by which receiver state reaches the engine.
     pub fn handle_cast_report(&self, report: CastEventReport) {
+        // A real DLNA completion retires the media-scoped grant that the TV
+        // used. The correlated DLNA session id prevents stale Cast reports
+        // from revoking a live renderer's URL.
+        if report.kind.as_str() == "media_completed"
+            && self.dlna.is_active()
+            && report
+                .cast_session_id
+                .as_deref()
+                .is_some_and(|id| id.starts_with("dlna-"))
+        {
+            if let Some(media_file_id) = self
+                .dlna
+                .take_media_id_for_session(report.cast_session_id.as_deref().unwrap_or(""))
+            {
+                self.server.cast_grants().revoke_media(media_file_id);
+            }
+        }
         let event = CastStatusEvent {
             kind: report.kind,
             playback_token: report.playback_token,
@@ -88,6 +108,8 @@ impl PlaybackOrchestrator {
                         .load_for_engine(media_file_id, playback_token, position_seconds, filename)
                         .await
                     {
+                        // A failed load must not leave its scoped URL usable.
+                        let _ = self.server.cast_grants().revoke_media(media_file_id);
                         // Feed the failure back with the exact token so only
                         // the load that failed is affected.
                         self.engine.on_cast_event(CastStatusEvent {
@@ -104,9 +126,17 @@ impl PlaybackOrchestrator {
                     }
                 }
                 EngineEffect::Stop => {
-                    let _ = self
-                        .cast
-                        .send_command(serde_json::json!({ "type": "control", "action": "stop" }));
+                    if self.dlna.is_active() {
+                        let media_before = self.dlna.snapshot().media_file_id;
+                        let _ = self.dlna.control("stop", None, None, None);
+                        if let Some(media_file_id) = media_before {
+                            self.server.cast_grants().revoke_media(media_file_id);
+                        }
+                    } else {
+                        let _ = self
+                            .cast
+                            .send_command(serde_json::json!({ "type": "control", "action": "stop" }));
+                    }
                 }
                 EngineEffect::Notify { level, message } => {
                     let _ = self
@@ -133,7 +163,6 @@ impl PlaybackOrchestrator {
                 );
             }
         }
-        self.cast.ensure_for_playback().await?;
         let scoped = self.server.create_cast_stream_url(media_file_id).await?;
         let probe = self.server.verify_cast_stream_url(media_file_id).await;
         let probe_ok = probe.reachable;
@@ -142,6 +171,31 @@ impl PlaybackOrchestrator {
         if !probe_ok {
             return Err(format!("The receiver would not be able to reach this video: {probe_message}"));
         }
+        if self.dlna.is_active() {
+            let device = self
+                .dlna
+                .selected()
+                .ok_or_else(|| "Choose a DLNA renderer before playing.".to_string())?;
+            let manager = self.dlna.clone();
+            let dlna = tokio::task::spawn_blocking(move || {
+                manager.start_playback(DlnaPlaybackRequest {
+                    device,
+                    url: scoped.url,
+                    media_id: media_file_id,
+                    filename,
+                    mime_type: scoped.mime_type,
+                    position_seconds,
+                    playback_token,
+                    cast_session_id: format!("dlna-{}", Uuid::new_v4()),
+                })
+            })
+            .await;
+            return match dlna {
+                Ok(result) => result,
+                Err(_) => Err("DLNA playback could not start.".to_string()),
+            };
+        }
+        self.cast.ensure_for_playback().await?;
         self.cast.set_pending_load(media_file_id, filename.clone());
         self.cast.send_command(serde_json::json!({
             "type": "load_media",

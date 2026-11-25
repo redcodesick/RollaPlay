@@ -9,6 +9,47 @@ export type CastDevice = {
   address: string
   port: number
   source: string
+  /** `cast` for Google Cast, `dlna` for UPnP AV renderers. */
+  transport?: string
+  avtransport_url?: string | null
+  rendering_url?: string | null
+  description_url?: string | null
+}
+
+export type DlnaStatus = {
+  selected: CastDevice | null
+  snapshot: CastPlaybackSnapshot
+}
+
+export type LgTvDevice = {
+  id: string
+  name: string
+  model: string
+  address: string
+  port: number
+  secure: boolean
+  paired: boolean
+}
+
+export type LgTvStatus = {
+  selected: LgTvDevice | null
+  paired: boolean
+  power_state: string | null
+  volume: number | null
+  muted: boolean | null
+  last_error: string | null
+}
+
+export type LgTvPairResult = {
+  status: 'paired' | 'prompt' | string
+  device: LgTvDevice
+  message: string
+}
+
+export type LgTvInput = {
+  id: string
+  label: string
+  connected: boolean
 }
 
 export type CastSenderStatus = {
@@ -102,7 +143,7 @@ export const isCastAvailable = () => isTauri()
 
 export type SenderHostRect = { x: number; y: number; width: number; height: number }
 
-/** Real LAN receivers found through `_googlecast._tcp.local.` mDNS. */
+/** Real LAN receivers found through mDNS (Cast) and SSDP (DLNA renderers). */
 export const discoverCastDevices = () => invoke<CastDevice[]>('discover_cast_devices')
 export const getCastSenderStatus = () => invoke<CastSenderStatus>('get_cast_sender_status')
 export const launchCastSender = () => invoke<CastSenderStatus>('launch_cast_sender')
@@ -124,6 +165,28 @@ export const castRequestSession = (device: CastDevice) =>
   castSendControl('request_session', { deviceId: device.id, deviceName: device.name })
 export const verifyCastMediaUrl = (mediaFileId: number) =>
   invoke<ConnectionTestResult>('verify_cast_media_url', { mediaFileId })
+
+/** DLNA renderers are discovered by SSDP and selected for real AVTransport playback. */
+export const selectDlnaDevice = (device: CastDevice) =>
+  invoke<DlnaStatus>('select_dlna_device', { device })
+export const disconnectDlna = () => invoke<void>('disconnect_dlna')
+export const getDlnaStatus = () => invoke<DlnaStatus>('get_dlna_status')
+
+/** LG webOS control is local SSAP only; playback still uses DLNA/UPnP. */
+export const discoverLgTvDevices = () => invoke<LgTvDevice[]>('discover_lg_tv_devices')
+export const selectLgTvDevice = (device: LgTvDevice) =>
+  invoke<LgTvStatus>('select_lg_tv_device', { device })
+export const getLgTvStatus = () => invoke<LgTvStatus>('get_lg_tv_status')
+export const pairLgTv = () => invoke<LgTvPairResult>('pair_lg_tv')
+export const refreshLgTv = () => invoke<LgTvStatus>('refresh_lg_tv')
+export const lgTvControl = (action: string, value?: number) =>
+  invoke<LgTvStatus>('lg_tv_control', { action, value })
+export const getLgTvInputs = () => invoke<LgTvInput[]>('get_lg_tv_inputs')
+export const lgTvSwitchInput = (inputId: string) =>
+  invoke<LgTvStatus>('lg_tv_switch_input', { inputId })
+export const lgTvOpenBrowser = (target: string) =>
+  invoke<void>('lg_tv_open_browser', { target })
+export const disconnectLgTv = () => invoke<void>('disconnect_lg_tv')
 
 export const onCastPlaybackEvent = (handler: (event: CastEventReport) => void) =>
   listen<CastEventReport>('cast-playback-event', (event) => handler(event.payload))

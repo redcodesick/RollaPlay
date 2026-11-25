@@ -2,6 +2,26 @@
 
 All notable changes to RollaPlay are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] - 2026-11-25
+
+### Added
+
+- Real DLNA/UPnP playback for smart TVs. Connect now discovers `MediaRenderer` devices over SSDP and drives AVTransport/RenderingControl through SOAP on the local LAN; renderer-reported state feeds the existing authoritative queue engine.
+- Local LG webOS SSAP control for discovered TVs: pairing, power, volume, media keys, HDMI input switching and a token-free browser fallback. Pairing keys are protected per Windows user and never displayed.
+- Transport-aware UI: the Connect, Cast, player bar and home views distinguish DLNA/UPnP from Google Cast and no longer imply Chrome is required for a DLNA renderer.
+- `docs/dlna-lg-validation.md` with the real-hardware gate that controls this release.
+
+### Changed
+
+- Existing Google Cast and signed updater flows are unchanged. A DLNA renderer uses the same short-lived, media-scoped LAN grant; completion, stop, disconnect and failed loads retire that grant.
+- Poller generation and correlated session ids prevent a slow SOAP poll from reporting stale position or completing the next item. Transport controls require a live correlated DLNA session instead of replaying a finished URL.
+
+### Notes
+
+- Stable signed NSIS/MSI release. Version 0.4.0 is a fresh tag; no published asset from 0.3.x is overwritten.
+- User-confirmed real-device validation on an LG webOS TV and a second DLNA TV was completed before this release. No mock devices, fabricated playback or fabricated completion events are used.
+- Windows SmartScreen still reports the publisher as unknown because no OV/EV Authenticode code-signing certificate is configured. Updater artifacts remain minisigned and verified by the embedded public key.
+
 ## [0.3.2] - 2026-11-25
 
 ### Fixed

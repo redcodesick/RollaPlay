@@ -18,8 +18,8 @@ import PlayerBar from './components/PlayerBar'
 import { CastCheck, ChromeCheck, NetworkCheck } from './components/SetupChecks'
 import {
   castDeviceName, castSendControl, clickCastSender, embedCastSender, formatSeconds,
-  getCastPlaybackState, hideCastSender, isCastAvailable, launchCastSender, onCastPlaybackEvent,
-  showCastSender, type SenderHostRect,
+  getCastPlaybackState, getDlnaStatus, hideCastSender, isCastAvailable, launchCastSender,
+  onCastPlaybackEvent, showCastSender, type DlnaStatus, type SenderHostRect,
 } from './cast'
 import {
   clearWatchHistory, formatDuration, getPlaybackState, isPlaylistAvailable, listPlaylists,
@@ -728,6 +728,8 @@ function App() {
     return () => { active = false; void unlisten.then((off) => off()) }
   }, [castReady, showNotice])
   const { data: castPlayback } = useSWR(castReady ? 'cast-playback-state' : null, getCastPlaybackState, { refreshInterval: 1500 })
+  const { data: dlnaStatus } = useSWR<DlnaStatus>(castReady ? 'dlna-status' : null, getDlnaStatus, { refreshInterval: 3000 })
+  const castTransport = dlnaStatus?.selected ? 'dlna' as const : 'cast' as const
   const castDevice = castDeviceName(castPlayback)
   const castTitle = castPlayback?.filename ?? null
   const castState = castPlayback?.player_state ?? null
@@ -955,7 +957,7 @@ function App() {
            </div>
           {!setupDone && <>
             <div className="content-heading first-steps-heading"><div><div className="section-eyebrow">START HERE</div><h2>Make it yours</h2></div><button className="text-link" onClick={openSetup}>Setup guide <span>→</span></button></div>
-            <div className="quick-cards"><button className="quick-card" onClick={browse}><span className="quick-card-icon purple"><FolderPlus size={19} /></span><span className="quick-card-copy"><strong>Add your folders</strong><small>Build your local library</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={() => void openConnect()}><span className="quick-card-icon blue"><Cast size={19} /></span><span className="quick-card-copy"><strong>Connect your TV</strong><small>{castDevice ? `Casting to ${castDevice}` : 'Choose a device'}</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={openNetworkSetup}><span className="quick-card-icon amber"><HardDrive size={19} /></span><span className="quick-card-copy"><strong>Check your setup</strong><small>Network and preferences</small></span><span className="card-arrow">↗</span></button></div>
+            <div className="quick-cards"><button className="quick-card" onClick={browse}><span className="quick-card-icon purple"><FolderPlus size={19} /></span><span className="quick-card-copy"><strong>Add your folders</strong><small>Build your local library</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={() => void openConnect()}><span className="quick-card-icon blue"><Cast size={19} /></span><span className="quick-card-copy"><strong>Connect your TV</strong><small>{castDevice ? `${castTransport === 'dlna' ? 'Streaming via DLNA to' : 'Casting to'} ${castDevice}` : 'Choose a device'}</small></span><span className="card-arrow">↗</span></button><button className="quick-card" onClick={openNetworkSetup}><span className="quick-card-icon amber"><HardDrive size={19} /></span><span className="quick-card-copy"><strong>Check your setup</strong><small>Network and preferences</small></span><span className="card-arrow">↗</span></button></div>
           </>}
           <HomePlaylistShelf playlists={playlists} onPlay={playSelectedPlaylist} onOpenPlaylist={openSelectedPlaylist} onOpenAll={() => setActive('Playlists')} />
         </>}
@@ -965,6 +967,7 @@ function App() {
       <PlayerBar
         castReady={castReady}
         playlistReady={playlistReady}
+        castTransport={castTransport}
         castConnected={castConnected}
         castHasMedia={castHasMedia}
         isPlaying={isPlaying}

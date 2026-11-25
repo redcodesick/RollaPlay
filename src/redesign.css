@@ -2636,6 +2636,131 @@ summary:focus-visible {
   font-size: 11px;
 }
 
+.connect-lg {
+  margin-top: 18px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.connect-note {
+  margin: 9px 0 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.connect-lg-device {
+  min-height: 46px;
+  margin-top: 6px;
+}
+
+.connect-lg-controls {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-raised);
+}
+
+.connect-lg-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.connect-lg-summary > div {
+  min-width: 0;
+}
+
+.connect-lg-summary strong,
+.connect-lg-summary span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connect-lg-summary strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.connect-lg-summary span {
+  color: var(--text-muted);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+}
+
+.connect-lg-controls button,
+.connect-lg-controls select {
+  min-height: 28px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.connect-lg-controls button:hover:not(:disabled),
+.connect-lg-controls select:hover {
+  border-color: var(--orange);
+  color: var(--text);
+}
+
+.connect-lg-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.connect-lg-summary button {
+  flex: 0 0 auto;
+  color: var(--orange);
+}
+
+.connect-lg-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.connect-lg-actions button,
+.connect-lg-row button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.connect-lg-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.connect-lg-row select {
+  min-width: 0;
+  flex: 1;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.connect-lg-row .connect-note {
+  flex: 1;
+  margin: 0;
+}
+
+.connect-lg-browser {
+  width: 100%;
+  margin-top: 8px;
+  color: var(--orange) !important;
+}
+
 /* Downloader ------------------------------------------------------------- */
 .download-page {
   max-width: 1080px;

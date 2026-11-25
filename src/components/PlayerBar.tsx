@@ -6,6 +6,7 @@ import { formatSeconds, playerStateLabel } from '../cast'
 export type PlayerBarProps = {
   castReady: boolean
   playlistReady: boolean
+  castTransport?: 'cast' | 'dlna'
   castConnected: boolean
   castHasMedia: boolean
   isPlaying: boolean
@@ -33,6 +34,7 @@ export type PlayerBarProps = {
 export default function PlayerBar({
   castReady,
   playlistReady,
+  castTransport = 'cast',
   castConnected,
   castHasMedia,
   isPlaying,
@@ -61,6 +63,7 @@ export default function PlayerBar({
   const canSeek = canControlPlayback && castDuration > 0
   const canUseVolume = castReady && castConnected
   const isBuffering = castConnected && castHasMedia && castState === 'BUFFERING'
+  const transportLabel = castTransport === 'dlna' ? 'DLNA / UPnP' : 'Google Cast'
 
   return (
     <div className="player-bar" aria-label="Playback controls">
@@ -115,7 +118,7 @@ export default function PlayerBar({
       </div>
 
       <div className="player-device">
-        <button className="player-destination" onClick={() => void onOpenConnect()} title="Open Connect" aria-label={`Cast destination: ${castDevice ?? 'no device connected'}. Open Connect.`}>
+        <button className="player-destination" onClick={() => void onOpenConnect()} title="Open Connect" aria-label={`${transportLabel} destination: ${castDevice ?? 'no device connected'}. Open Connect.`}>
           <Cast size={18} className={castConnected ? 'casting' : ''} />
           <span>{castDevice ?? 'No Cast device'}</span>
         </button>
@@ -138,7 +141,9 @@ export default function PlayerBar({
         </div>
       </div>
 
-      <div className="player-disclaimer"><span /> {castConnected && castHasMedia ? 'PLAYBACK CONTROLLED THROUGH GOOGLE CAST' : 'PLAYER READY WHEN CAST IS CONNECTED'}</div>
+      <div className="player-disclaimer"><span /> {castConnected && castHasMedia
+        ? `PLAYBACK CONTROLLED THROUGH ${transportLabel.toUpperCase()}`
+        : `PLAYER READY WHEN ${transportLabel.toUpperCase()} IS CONNECTED`}</div>
     </div>
   )
 }

@@ -15,7 +15,9 @@ use walkdir::WalkDir;
 
 mod cast_discovery;
 mod cast_sender;
+mod dlna;
 mod downloader;
+mod lg_tv;
 mod media_server;
 mod network;
 mod playback_orchestrator;
@@ -27,7 +29,9 @@ mod thumbnail;
 
 use cast_discovery::CastDevice;
 use cast_sender::{CastDiagnosticsSnapshot, CastEventReport, CastPlaybackSnapshot, CastSenderManager, CastSenderStatus};
+use dlna::{DlnaManager, DlnaStatus};
 use downloader::{cancel_download, downloader_tools, install_tools_winget, prepare_tools, start_download};
+use lg_tv::{LgTvDevice, LgTvInput, LgTvManager, LgTvPairResult, LgTvStatus};
 use media_server::{ConnectionTestResult, MediaServerManager, MediaServerStatus, StreamDiagnosticsSnapshot};
 use network::NetworkDiagnostics;
 use playback_orchestrator::PlaybackOrchestrator;
@@ -1738,9 +1742,128 @@ fn clear_media_stream_diagnostics(server: State<'_, MediaServerManager>) {
 /// talk to the sender page and never returns credentials or streaming URLs.
 #[tauri::command]
 async fn discover_cast_devices() -> Result<Vec<CastDevice>, String> {
-    tokio::task::spawn_blocking(|| cast_discovery::discover(Duration::from_secs(4)))
+    let devices = tokio::task::spawn_blocking(|| {
+        let mut devices = cast_discovery::discover(Duration::from_secs(4)).unwrap_or_default();
+        // A failed SSDP pass must not hide working Chromecast receivers.
+        if let Ok(mut renderers) = dlna::discover(Duration::from_secs(4)) {
+            for renderer in &mut renderers {
+                renderer.id = format!("dlna:{}", renderer.id);
+            }
+            devices.append(&mut renderers);
+        }
+        devices
+    })
+    .await
+    .map_err(|_| "Cast discovery could not start.".to_string())?;
+    Ok(devices)
+}
+
+#[tauri::command]
+fn select_dlna_device(device: CastDevice, dlna: State<'_, DlnaManager>) -> Result<DlnaStatus, String> {
+    dlna.select(device)?;
+    Ok(dlna.status())
+}
+
+#[tauri::command]
+fn disconnect_dlna(
+    server: State<'_, MediaServerManager>,
+    dlna: State<'_, DlnaManager>,
+) -> Result<(), String> {
+    let media_file_id = dlna.snapshot().media_file_id;
+    dlna.disconnect()?;
+    if let Some(media_file_id) = media_file_id {
+        server.cast_grants().revoke_media(media_file_id);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_dlna_status(dlna: State<'_, DlnaManager>) -> Result<DlnaStatus, String> {
+    Ok(dlna.status())
+}
+
+/// Real SSDP discovery for LG webOS TVs. No device list is cached or faked.
+#[tauri::command]
+async fn discover_lg_tv_devices() -> Result<Vec<LgTvDevice>, String> {
+    tokio::task::spawn_blocking(|| lg_tv::discover(Duration::from_secs(4)))
         .await
-        .map_err(|_| "Cast discovery could not start.".to_string())?
+        .map_err(|_| "LG TV discovery could not start".to_string())?
+}
+
+#[tauri::command]
+fn select_lg_tv_device(
+    device: LgTvDevice,
+    lg: State<'_, LgTvManager>,
+) -> Result<LgTvStatus, String> {
+    lg.select(device)
+}
+
+#[tauri::command]
+fn get_lg_tv_status(lg: State<'_, LgTvManager>) -> Result<LgTvStatus, String> {
+    Ok(lg.status_snapshot())
+}
+
+#[tauri::command]
+async fn pair_lg_tv(lg: State<'_, LgTvManager>) -> Result<LgTvPairResult, String> {
+    let manager = lg.inner().clone();
+    tokio::task::spawn_blocking(move || manager.pair())
+        .await
+        .map_err(|_| "LG TV pairing could not start".to_string())?
+}
+
+#[tauri::command]
+async fn refresh_lg_tv(lg: State<'_, LgTvManager>) -> Result<LgTvStatus, String> {
+    let manager = lg.inner().clone();
+    tokio::task::spawn_blocking(move || manager.refresh())
+        .await
+        .map_err(|_| "LG TV status could not be read".to_string())?
+}
+
+#[tauri::command]
+async fn lg_tv_control(
+    action: String,
+    value: Option<f64>,
+    lg: State<'_, LgTvManager>,
+) -> Result<LgTvStatus, String> {
+    let manager = lg.inner().clone();
+    tokio::task::spawn_blocking(move || manager.command(&action, value))
+        .await
+        .map_err(|_| "The LG control could not be sent".to_string())?
+}
+
+#[tauri::command]
+async fn get_lg_tv_inputs(lg: State<'_, LgTvManager>) -> Result<Vec<LgTvInput>, String> {
+    let manager = lg.inner().clone();
+    tokio::task::spawn_blocking(move || manager.inputs())
+        .await
+        .map_err(|_| "The TV inputs could not be read".to_string())?
+}
+
+#[tauri::command]
+async fn lg_tv_switch_input(
+    input_id: String,
+    lg: State<'_, LgTvManager>,
+) -> Result<LgTvStatus, String> {
+    let manager = lg.inner().clone();
+    tokio::task::spawn_blocking(move || manager.switch_input(&input_id))
+        .await
+        .map_err(|_| "The TV input could not be changed".to_string())?
+}
+
+#[tauri::command]
+async fn lg_tv_open_browser(
+    target: String,
+    lg: State<'_, LgTvManager>,
+) -> Result<(), String> {
+    let manager = lg.inner().clone();
+    tokio::task::spawn_blocking(move || manager.open_browser(&target))
+        .await
+        .map_err(|_| "The browser URL could not be sent".to_string())?
+}
+
+#[tauri::command]
+fn disconnect_lg_tv(lg: State<'_, LgTvManager>) -> Result<(), String> {
+    lg.disconnect()
 }
 
 #[tauri::command]
@@ -1853,7 +1976,11 @@ async fn get_cast_diagnostics(
 fn get_cast_playback_state(
     database: State<'_, AppDatabase>,
     cast: State<'_, CastSenderManager>,
+    dlna: State<'_, DlnaManager>,
 ) -> Result<CastPlaybackSnapshot, String> {
+    if dlna.is_active() {
+        return Ok(dlna.snapshot());
+    }
     let mut snapshot = cast.snapshot();
     if snapshot.media_file_id.is_none() {
         let connection = database.0.lock().map_err(|_| "Local database is unavailable".to_string())?;
@@ -1926,6 +2053,7 @@ fn sanitize_cast_field(value: String, max_chars: usize) -> String {
 async fn cast_send_control(
     server: State<'_, MediaServerManager>,
     cast: State<'_, CastSenderManager>,
+    dlna: State<'_, DlnaManager>,
     action: String,
     position_seconds: Option<f64>,
     volume: Option<f64>,
@@ -1939,6 +2067,30 @@ async fn cast_send_control(
             | "disconnect" | "request_session" | "close_sender"
     ) {
         return Err("Unknown Cast control".to_string());
+    }
+    if dlna.is_active() {
+        match action.as_str() {
+            "disconnect" => {
+                let media_id = dlna.snapshot().media_file_id;
+                dlna.disconnect()?;
+                if let Some(media_file_id) = media_id {
+                    server.cast_grants().revoke_media(media_file_id);
+                }
+                return Ok(());
+            }
+            "request_session" | "close_sender" => return Ok(()),
+            other => {
+                // capture before control clears the snapshot on stop.
+                let media_before = dlna.snapshot().media_file_id;
+                let result = dlna.control(other, position_seconds, volume, muted);
+                if other == "stop" && result.is_ok() {
+                    if let Some(media_file_id) = media_before {
+                        server.cast_grants().revoke_media(media_file_id);
+                    }
+                }
+                return result;
+            }
+        }
     }
     let command = serde_json::json!({
         "type": "control",
@@ -2489,6 +2641,10 @@ pub fn run() {
             server.start_lifecycle_tasks();
             let cast = CastSenderManager::new(app.handle().clone(), Arc::clone(&database));
             app.manage(cast.clone());
+            let dlna = DlnaManager::new(app.handle().clone());
+            app.manage(dlna.clone());
+            let lg_tv = LgTvManager::new(Arc::clone(&database));
+            app.manage(lg_tv);
             let playback = PlaybackEngine::new(Arc::clone(&database))
                 .map_err(std::io::Error::other)?;
             app.manage(playback.clone());
@@ -2497,6 +2653,7 @@ pub fn run() {
                 playback,
                 server.clone(),
                 cast.clone(),
+                dlna.clone(),
             );
             app.manage(orchestrator.clone());
             // The authoritative queue engine listens to real Cast SDK events
@@ -2520,6 +2677,8 @@ pub fn run() {
                 closing_window.state::<downloader::DownloadState>().cancel();
                 let server = closing_window.state::<MediaServerManager>().inner().clone();
                 let cast = closing_window.state::<CastSenderManager>().inner().clone();
+                let dlna = closing_window.state::<DlnaManager>().inner().clone();
+                let lg_tv = closing_window.state::<LgTvManager>().inner().clone();
                 if server.shutdown_is_finished() {
                     return;
                 }
@@ -2532,6 +2691,8 @@ pub fn run() {
                     // the sender process and leave the session alive. Ask the
                     // receiver to leave before the media server goes away.
                     let _ = cast.stop_playback();
+                    let _ = dlna.disconnect();
+                    let _ = lg_tv.disconnect();
                     server.shutdown().await;
                     sender_embed::detach_embedded();
                     cast.shutdown().await;
@@ -2572,6 +2733,19 @@ pub fn run() {
             get_media_stream_diagnostics,
             clear_media_stream_diagnostics,
             discover_cast_devices,
+            select_dlna_device,
+            disconnect_dlna,
+            get_dlna_status,
+            discover_lg_tv_devices,
+            select_lg_tv_device,
+            get_lg_tv_status,
+            pair_lg_tv,
+            refresh_lg_tv,
+            lg_tv_control,
+            get_lg_tv_inputs,
+            lg_tv_switch_input,
+            lg_tv_open_browser,
+            disconnect_lg_tv,
             get_cast_sender_status,
             launch_cast_sender,
             embed_cast_sender,

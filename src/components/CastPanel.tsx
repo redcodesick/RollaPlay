@@ -7,9 +7,9 @@ import {
 import { isDesktopApp } from '../media'
 import {
   castDeviceName, castSendControl, castStateLabel, formatSeconds, getCastDiagnostics,
-  getCastPlaybackState, getCastSenderStatus, isCastAvailable, launchCastSender, onCastPlaybackEvent,
-  onCastSenderStatusChanged, playerStateLabel, sessionStateLabel, stopCastSender,
-  type CastPlaybackSnapshot, type CastSenderStatus,
+  getCastPlaybackState, getCastSenderStatus, getDlnaStatus, isCastAvailable, launchCastSender,
+  onCastPlaybackEvent, onCastSenderStatusChanged, playerStateLabel, sessionStateLabel, stopCastSender,
+  type CastPlaybackSnapshot, type CastSenderStatus, type DlnaStatus,
 } from '../cast'
 
 const senderWindowLabels: Record<string, string> = {
@@ -33,7 +33,15 @@ function formatWhen(epochMs: number | null) {
   return new Date(epochMs).toLocaleString()
 }
 
-function discoveryHint(snapshot: CastPlaybackSnapshot, status: CastSenderStatus | undefined) {
+function discoveryHint(
+  snapshot: CastPlaybackSnapshot,
+  status: CastSenderStatus | undefined,
+  dlnaActive: boolean,
+) {
+  if (dlnaActive) {
+    if (snapshot.last_error) return snapshot.last_error
+    return undefined
+  }
   if (status && !status.chrome_installed) {
     return 'Chrome is not installed. Install Google Chrome on this PC, then launch the sender again.'
   }
@@ -71,6 +79,12 @@ export default function CastPanel() {
     getCastPlaybackState,
     { refreshInterval: 1500 },
   )
+  const { data: dlna, mutate: refreshDlna } = useSWR<DlnaStatus>(
+    isDesktop ? 'dlna-status' : null,
+    getDlnaStatus,
+    { refreshInterval: 3000 },
+  )
+  const dlnaActive = !!dlna?.selected
 
   useEffect(() => {
     if (!castReady) return
@@ -84,6 +98,7 @@ export default function CastPanel() {
         void refreshPlayback()
         void refreshDiagnostics()
         void refreshStatus()
+        void refreshDlna()
       }),
       onCastSenderStatusChanged(() => {
         void refreshStatus()
@@ -97,7 +112,7 @@ export default function CastPanel() {
       disposed = true
       stops.forEach((stop) => stop())
     }
-  }, [castReady, refreshDiagnostics, refreshPlayback, refreshStatus])
+  }, [castReady, refreshDiagnostics, refreshDlna, refreshPlayback, refreshStatus])
 
   async function runAction(action: () => Promise<unknown>, successText?: string): Promise<boolean> {
     setIsWorking(true)
@@ -164,19 +179,24 @@ export default function CastPanel() {
   }, [snapshot.volume_level, volumePreview])
   const position = seekPreview ?? snapshot.position_seconds ?? 0
   const duration = snapshot.duration_seconds ?? 0
-  const hint = discoveryHint(snapshot, status)
+  const hint = discoveryHint(snapshot, status, dlnaActive)
   const volume = snapshot.volume_level ?? 1
   const muted = !!snapshot.muted
-  const deviceLabel = connected ? `Casting to ${connectedDevice}` : 'No Cast device connected'
+  const transport = dlnaActive ? 'DLNA / UPnP' : 'Google Cast'
+  const deviceLabel = connected
+    ? `${dlnaActive ? 'Streaming via DLNA to' : 'Casting to'} ${connectedDevice}`
+    : `No ${dlnaActive ? 'DLNA' : 'Cast'} device connected`
   const stateClass = connected ? (playing ? 'playing' : 'paused') : 'offline'
 
   return (
     <section className="cast-panel" aria-labelledby="cast-panel-title">
       <div className="cast-section-heading">
         <div>
-          <div className="section-eyebrow"><span className="eyebrow-line" /> GOOGLE CAST</div>
-          <h2 id="cast-panel-title">Cast connection</h2>
-          <p>Stream registered videos to a Cast receiver on your home network. Use Connect to browse devices discovered on the LAN.</p>
+          <div className="section-eyebrow"><span className="eyebrow-line" /> {dlnaActive ? 'DLNA / UPNP' : 'GOOGLE CAST'}</div>
+          <h2 id="cast-panel-title">{dlnaActive ? 'DLNA connection' : 'Cast connection'}</h2>
+          <p>{dlnaActive
+            ? 'Video is playing through the selected TV’s AVTransport service. Use Connect to switch receivers; LG webOS TV controls are available there.'
+            : 'Stream registered videos to a Cast receiver on your home network. Use Connect to browse devices discovered on the LAN.'}</p>
         </div>
         <div className={`cast-status-pill ${stateClass}`} role="status"><i />{deviceLabel}</div>
       </div>
@@ -190,20 +210,24 @@ export default function CastPanel() {
         <article className="cast-info-card"><span><Globe size={15} /> GOOGLE CHROME</span><strong>{status?.chrome_installed ? 'Detected' : 'Not found'}</strong><small>{status?.chrome_installed ? status.chrome_path ?? 'Registered install location' : 'The official Cast sender SDK requires Chrome'}</small></article>
         <article className="cast-info-card"><span><Cast size={15} /> HIDDEN SENDER</span><strong>{senderWindowLabels[status?.sender_window_state ?? 'not_launched'] ?? 'Unknown'}</strong><small>Sender page {status?.sender_page_connected ? 'connected' : 'not connected'} · last seen {formatAgo(status?.sender_page_last_seen_ms_ago ?? null)}</small></article>
         <article className="cast-info-card"><span><Cast size={15} /> DISCOVERY</span><strong>{castStateLabel(snapshot.cast_state)}</strong><small>Session: {sessionStateLabel(snapshot.session_state)}</small></article>
-        <article className="cast-info-card"><span><Cast size={15} /> CONNECTED DEVICE</span><strong>{connectedDevice ?? 'None'}</strong><small>{status?.bridge_state === 'running' ? `Local sender bridge on 127.0.0.1:${status.bridge_port ?? ''}` : 'Local sender bridge stopped'}</small></article>
+        <article className="cast-info-card"><span><Cast size={15} /> CONNECTED DEVICE</span><strong>{connectedDevice ?? 'None'}</strong><small>{dlnaActive ? `${transport} · renderer state polled from the TV` : status?.bridge_state === 'running' ? `Local sender bridge on 127.0.0.1:${status.bridge_port ?? ''}` : 'Local sender bridge stopped'}</small></article>
       </div>
 
       <div className="cast-controls-card">
         <div className="cast-controls-heading">
           <div>
-            <h3>Cast sender</h3>
-            <p>The player stays in this window. Chrome runs only the official Cast SDK, hidden from view; once a receiver is selected it stays connected, and closing the device menu does not stop playback.</p>
+            <h3>{dlnaActive ? 'DLNA playback' : 'Cast sender'}</h3>
+            <p>{dlnaActive
+              ? 'Chrome is not used for this receiver. The TV fetches the video from the local media server with a short-lived, media-scoped URL; playback state comes from the renderer.'
+              : 'The player stays in this window. Chrome runs only the official Cast SDK, hidden from view; once a receiver is selected it stays connected, and closing the device menu does not stop playback.'}</p>
           </div>
           <div className="cast-controls-actions">
-            <button className="button-primary" onClick={() => runAction(() => launchCastSender(), connectedDevice ? `Sender ready. Casting to ${connectedDevice}.` : 'Sender ready. Choose your TV from the device menu.')} disabled={!isDesktop || isWorking}>
+            <button className="button-primary" onClick={() => dlnaActive
+              ? setMessage('Use the Connect button in the top bar to switch receivers.')
+              : void runAction(() => launchCastSender(), connectedDevice ? `Sender ready. Casting to ${connectedDevice}.` : 'Sender ready. Choose your TV from the device menu.')} disabled={!isDesktop || isWorking}>
               {isWorking ? <LoaderCircle size={15} className="spin-icon" /> : <Cast size={15} />} Open Connect
             </button>
-            <button className="folder-action" onClick={() => runAction(() => stopCastSender(), 'The Cast sender was closed.')} disabled={!isDesktop || isWorking}>Close sender</button>
+            {!dlnaActive && <button className="folder-action" onClick={() => runAction(() => stopCastSender(), 'The Cast sender was closed.')} disabled={!isDesktop || isWorking}>Close sender</button>}
           </div>
         </div>
         {status?.last_error && <p className="cast-error-line" role="status"><AlertCircle size={14} />{status.last_error}</p>}
@@ -278,8 +302,8 @@ export default function CastPanel() {
       <div className="cast-diagnostics-card">
         <div className="cast-controls-heading">
           <div>
-            <h3>Cast diagnostics</h3>
-            <p>Sender, discovery, and streaming health. Credentials are never displayed here.</p>
+            <h3>{transport} diagnostics</h3>
+            <p>Receiver, discovery, and streaming health. Credentials are never displayed here.</p>
           </div>
           <button className="folder-action" onClick={() => runAction(() => refreshDiagnostics())} disabled={!isDesktop}>
             <RefreshCw size={14} /> Refresh
@@ -289,6 +313,7 @@ export default function CastPanel() {
           <article className="cast-diagnostic-row"><div><strong>Sender status</strong><span>{status?.sender_page_connected ? 'Connected to the desktop bridge' : 'Waiting for the Chrome sender page'}</span></div><span className={status?.sender_page_connected ? 'cast-ok' : ''}>{status?.sender_page_connected ? 'OK' : 'IDLE'}</span></article>
           <article className="cast-diagnostic-row"><div><strong>Chrome status</strong><span>{status?.chrome_installed ? status.chrome_path ?? 'Detected' : 'Chrome is not installed on this PC'}</span></div><span className={status?.chrome_installed ? 'cast-ok' : 'cast-bad'}>{status?.chrome_installed ? 'OK' : 'MISSING'}</span></article>
           <article className="cast-diagnostic-row"><div><strong>Discovery status</strong><span>{castStateLabel(snapshot.cast_state)}</span></div><span className={snapshot.cast_state === 'CONNECTED' ? 'cast-ok' : ''}>{snapshot.cast_state ?? 'IDLE'}</span></article>
+          <article className="cast-diagnostic-row"><div><strong>Playback transport</strong><span>{transport}</span></div><span>{dlnaActive ? 'DLNA' : 'CAST'}</span></article>
           <article className="cast-diagnostic-row"><div><strong>Connected device</strong><span>{connectedDevice ?? 'None yet'}</span></div><span>{connectedDevice ? 'ACTIVE' : 'NONE'}</span></article>
           <article className="cast-diagnostic-row"><div><strong>Current session</strong><span>{sessionStateLabel(snapshot.session_state)}</span></div><span>{snapshot.session_state ?? 'NONE'}</span></article>
           <article className="cast-diagnostic-row"><div><strong>Media URL reachability</strong><span>{diagnostics?.media_url_probe ? diagnostics.media_url_probe.message : 'Probe a cast to check the LAN URL'}</span></div><span className={diagnostics?.media_url_probe?.reachable ? 'cast-ok' : ''}>{diagnostics?.media_url_probe ? (diagnostics.media_url_probe.reachable ? `HTTP ${diagnostics.media_url_probe.status_code ?? 206}` : 'FAILED') : '—'}</span></article>
@@ -296,7 +321,9 @@ export default function CastPanel() {
           <article className="cast-diagnostic-row"><div><strong>Last error</strong><span>{snapshot.last_error ?? 'None recorded'}</span></div><span>{snapshot.last_error ? 'ERROR' : 'OK'}</span></article>
           <article className="cast-diagnostic-row"><div><strong>Last connection attempt</strong><span>{formatWhen(status?.last_launch_attempt_epoch_ms ?? null)}{status?.relaunch_attempts ? ` · ${status.relaunch_attempts} recovery attempt${status.relaunch_attempts === 1 ? '' : 's'}` : ''}</span></div><span>{status?.last_launch_attempt_epoch_ms ? 'DONE' : '—'}</span></article>
         </div>
-        <div className="cast-network-note"><ShieldCheck size={15} /><span>The sender page receives only the minimum needed to cast: a scoped, expiring media URL, its MIME type, and the title. The pairing token and DPAPI secrets never reach Chrome or the receiver.</span></div>
+        <div className="cast-network-note"><ShieldCheck size={15} /><span>{dlnaActive
+          ? 'The renderer receives only a scoped, expiring media URL and its MIME type. The pairing token and DPAPI secrets are never sent to the TV.'
+          : 'The sender page receives only the minimum needed to cast: a scoped, expiring media URL, its MIME type, and the title. The pairing token and DPAPI secrets never reach Chrome or the receiver.'}</span></div>
       </div>
     </section>
   )
