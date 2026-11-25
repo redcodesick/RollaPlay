@@ -14,6 +14,7 @@ All notable changes to RollaPlay are documented here. The format follows [Keep a
 ### Notes
 
 - Stable signed NSIS/MSI release. The updater flow itself is unchanged from the validated 0.3.0 → 0.3.1 pass; a dedicated 0.3.1 → 0.3.2 E2E run has not been recorded yet.
+- The Windows app and installer icon now uses the Rolla cat-headphones artwork. The 0.3.2 assets were rebuilt and re-signed in place because the first publication had zero downloads.
 
 ## [0.3.1] - 2026-11-24
 
