@@ -115,9 +115,11 @@ summary:focus-visible {
   box-shadow: 0 6px 18px rgba(var(--red-rgb), 0.22);
 }
 
-.rolla-mark svg {
-  width: 74%;
-  height: 74%;
+.rolla-mark img {
+  display: block;
+  width: 82%;
+  height: 82%;
+  object-fit: contain;
 }
 
 .rolla-mark-title {
@@ -166,9 +168,9 @@ summary:focus-visible {
   box-shadow: 0 8px 20px rgba(var(--red-rgb), 0.24);
 }
 
-.brand .brand-mark svg {
-  width: 21px;
-  height: 21px;
+.brand .brand-mark img {
+  width: 82%;
+  height: 82%;
 }
 
 .brand-name {
@@ -3153,9 +3155,9 @@ summary:focus-visible {
   box-shadow: 0 10px 26px rgba(var(--red-rgb), 0.25);
 }
 
-.about-mark svg {
-  width: 30px;
-  height: 30px;
+.about-mark img {
+  width: 82%;
+  height: 82%;
 }
 
 .about-brand p {
