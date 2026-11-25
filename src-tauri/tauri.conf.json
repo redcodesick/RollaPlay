@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "RollaPlay",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "identifier": "app.windowsmediastation.local",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -44,7 +44,8 @@
     "longDescription": "Browse local video files and stream them to Google Cast devices on your home network.",
     "windows": {
       "nsis": {
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "installMode": "perMachine"
       },
       "wix": {
         "language": "en-US"

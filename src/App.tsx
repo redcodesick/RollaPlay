@@ -123,7 +123,7 @@ function Sidebar({
       <button className="sidebar-collapse" onClick={onToggle} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!collapsed}>
         {collapsed ? <ChevronsRight size={18} /> : <><ChevronsLeft size={18} /><span>Collapse</span></>}
       </button>
-      <div className="profile-row"><span className="profile-avatar"><BrandMark size={20} /></span><div><strong>RollaPlay Station</strong><span>Local device</span></div></div>
+      <div className="profile-row"><span className="profile-avatar"><BrandMark size={32} /></span><div><strong>RollaPlay Station</strong><span>Local device</span></div></div>
     </aside>
   )
 }
@@ -470,7 +470,7 @@ function AboutDialog({
         <button className="dialog-close" onClick={onClose} aria-label="Close about">×</button>
         <div className="setup-eyebrow"><BrandMark size={16} /> ABOUT THIS APP</div>
         <div className="about-brand">
-          <span className="about-mark"><BrandMark size={38} title /></span>
+          <span className="about-mark"><BrandMark size={54} title /></span>
           <div><h2 id="about-title">{info.name}</h2><p>Local media, loud attitude.</p></div>
         </div>
         <p className="about-lede">RollaPlay keeps your video library on this PC and streams original files straight to your TV. No account, no uploads, no subscriptions.</p>

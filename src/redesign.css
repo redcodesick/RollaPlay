@@ -109,6 +109,7 @@ summary:focus-visible {
   display: inline-grid;
   place-items: center;
   flex: 0 0 auto;
+  overflow: hidden;
   border-radius: 9px;
   background: var(--red);
   color: var(--text);
@@ -117,8 +118,8 @@ summary:focus-visible {
 
 .rolla-mark img {
   display: block;
-  width: 82%;
-  height: 82%;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
 }
 
@@ -169,8 +170,8 @@ summary:focus-visible {
 }
 
 .brand .brand-mark img {
-  width: 82%;
-  height: 82%;
+  width: 100%;
+  height: 100%;
 }
 
 .brand-name {
@@ -3156,8 +3157,8 @@ summary:focus-visible {
 }
 
 .about-mark img {
-  width: 82%;
-  height: 82%;
+  width: 100%;
+  height: 100%;
 }
 
 .about-brand p {

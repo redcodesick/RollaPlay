@@ -17,6 +17,17 @@ All notable changes to RollaPlay are documented here. The format follows [Keep a
 - The Windows app and installer icon now uses the Rolla cat-headphones artwork. The 0.3.2 assets were rebuilt and re-signed in place because the first publication had zero downloads.
 - The in-app `BrandMark` (sidebar, About, setup and profile) now uses the same cat-headphones artwork instead of the inline `R` SVG, so the app mark and the Windows icon match.
 
+## [0.3.3] - 2026-11-25
+
+### Changed
+
+- The in-app `BrandMark` artwork is tightly cropped and fills its red tile instead of floating inside it. The About and profile instances were enlarged to match their containers.
+- NSIS now defaults to a per-machine install under `C:\Program Files\RollaPlay` instead of the Tauri default per-user path under `%LOCALAPPDATA%`. This requires administrator approval and does **not** migrate an existing per-user install: uninstall the old copy before installing this one. The MSI already installs per-machine.
+
+### Notes
+
+- Version 0.3.3 is a fresh release, not an overwrite of 0.3.2: 0.3.2 had already been downloaded when these changes were finalized.
+
 ## [0.3.1] - 2026-11-24
 
 ### Fixed
