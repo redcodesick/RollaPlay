@@ -2,6 +2,15 @@
 
 All notable changes to RollaPlay are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- Downloader tool discovery is deterministic: the app-local `bin` copy is checked first, then WinGet Links, WinGet packages and `PATH`. A stale WinGet folder can no longer shadow a working tool, and each candidate is probed in order so a broken executable does not hide a valid one (issue #3).
+- "Prepare from GitHub" now refreshes existing `yt-dlp.exe` and FFmpeg through a temporary file and atomic move, so an old tool that still answers `--version` can actually be updated. The status card exposes that action as **Refresh tools from GitHub** even while the tools look ready.
+- Readiness probes use an 8-second window instead of 4 seconds, and the Downloader re-probes before every download and after a failure, so the status pills no longer stay on "ready" after a real download fails.
+- Download failures are classified from both stdout and stderr, with new network, stale-extractor and FFmpeg merge messages. Unmapped failures now report the yt-dlp exit code instead of the generic "Check the link and update yt-dlp" text. No raw tool output is echoed.
+
 ## [0.3.1] - 2026-11-24
 
 ### Fixed

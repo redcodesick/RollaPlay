@@ -2,10 +2,12 @@
 //!
 //! The Downloader fetches a progressive H.264/AAC MP4 by default. HD quality
 //! merges separate AVC/AAC streams with FFmpeg. Tools are never bundled: they
-//! can be installed from their official GitHub releases or, when ticked in the
-//! UI, with WinGet. Whole playlists are downloaded into the folder chosen in
-//! the UI. The child process is launched without a shell and no URL or
-//! filesystem path is ever written to diagnostics.
+//! are installed into app-local data from their official GitHub releases or,
+//! when ticked in the UI, with WinGet. Discovery always prefers that app-local
+//! copy so a stale WinGet folder cannot shadow a known-good tool. Whole
+//! playlists are downloaded into the folder chosen in the UI. The child process
+//! is launched without a shell and no URL or filesystem path is ever written
+//! to diagnostics.
 
 use serde::Serialize;
 use std::{
@@ -28,7 +30,7 @@ const SD_FORMAT: &str = "best[ext=mp4][acodec!=none][vcodec!=none]/18";
 const HD_FORMAT: &str = "bv*[vcodec^=avc]+ba[acodec^=mp4a]/b[ext=mp4]/b";
 const POLL_INTERVAL: Duration = Duration::from_millis(120);
 const STALL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const TOOL_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
+const TOOL_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const INSTALL_SCRIPT: &str = include_str!("../../scripts/install-downloader-tools.ps1");
 const WINGET_SCRIPT: &str = include_str!("../../scripts/install-downloader-tools-winget.ps1");
 
@@ -137,31 +139,68 @@ fn search_directory(directory: &Path, executable: &str, depth: usize) -> Option<
     newest.map(|(_, path)| path)
 }
 
-fn find_executable(app: &AppHandle, name: &str) -> Option<PathBuf> {
+/// Candidate order is fixed: app-local `bin` first, then WinGet Links, then
+/// WinGet's versioned packages and finally PATH. A WinGet package can no longer
+/// silently shadow a tool RollaPlay installed itself.
+fn candidate_paths(
+    app_local: Option<PathBuf>,
+    local_app_data: Option<OsString>,
+    path_env: Option<OsString>,
+    name: &str,
+) -> Vec<PathBuf> {
     let executable = format!("{name}.exe");
     let mut candidates = Vec::new();
-    if let Ok(data) = app.path().app_local_data_dir() {
-        candidates.push(data.join("bin").join(&executable));
+    if let Some(directory) = app_local {
+        candidates.push(directory.join("bin").join(&executable));
     }
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        let local_root = PathBuf::from(&local);
+    if let Some(local) = local_app_data {
+        let local_root = PathBuf::from(local);
         candidates.push(local_root.join(r"Microsoft\WinGet\Links").join(&executable));
         // WinGet installs portable tools in versioned folders that are not on
-        // PATH until the shell restarts. Scan them so a fresh install works
-        // immediately without restarting RollaPlay.
+        // PATH until the shell restarts. Scan them as a lower-priority source
+        // so a fresh install still works without restarting RollaPlay.
         let packages = local_root.join(r"Microsoft\WinGet\Packages");
         if let Some(found) = search_directory(&packages, &executable, 0) {
-            return Some(found);
+            candidates.push(found);
         }
     }
-    if let Some(found) = candidates.into_iter().find(|path| path.is_file()) {
-        return Some(found);
+    if let Some(paths) = path_env {
+        candidates.extend(std::env::split_paths(&paths).map(|directory| directory.join(&executable)));
     }
-    std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|directory| directory.join(&executable))
-            .find(|path| path.is_file())
-    })
+    candidates
+}
+
+fn executable_candidates(app: &AppHandle, name: &str) -> Vec<PathBuf> {
+    candidate_paths(
+        app.path().app_local_data_dir().ok(),
+        std::env::var_os("LOCALAPPDATA"),
+        std::env::var_os("PATH"),
+        name,
+    )
+}
+
+fn find_executable(app: &AppHandle, name: &str) -> Option<PathBuf> {
+    executable_candidates(app, name).into_iter().find(|path| path.is_file())
+}
+
+/// Probe candidates in priority order and keep the first executable that
+/// actually answers. A broken app-local shim no longer blocks a working WinGet
+/// or PATH copy, while `found` still distinguishes "not responding" from
+/// "not installed".
+fn probe_tool_candidates(app: &AppHandle, name: &str, version_arg: &str) -> (bool, Option<PathBuf>) {
+    let mut found = None;
+    for path in executable_candidates(app, name) {
+        if !path.is_file() {
+            continue;
+        }
+        if found.is_none() {
+            found = Some(path.clone());
+        }
+        if probe_tool(&path, version_arg) {
+            return (true, Some(path));
+        }
+    }
+    (false, found)
 }
 
 fn locate_tools(app: &AppHandle) -> DownloaderTools {
@@ -209,6 +248,9 @@ fn probe_tool(executable: &Path, version_arg: &str) -> bool {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
+            if let Some(handle) = reader {
+                let _ = handle.join();
+            }
             return false;
         }
         std::thread::sleep(POLL_INTERVAL);
@@ -218,13 +260,13 @@ fn probe_tool(executable: &Path, version_arg: &str) -> bool {
 fn tool_hint(tools: &DownloaderTools) -> String {
     if !tools.yt_dlp_ready {
         if tools.yt_dlp_found {
-            "yt-dlp was found but did not respond to a version check. Install it again with WinGet.".to_string()
+            "yt-dlp was found but did not respond to a version check. Reinstall it with WinGet or refresh it with Prepare from GitHub.".to_string()
         } else {
             "Install yt-dlp with WinGet or fetch it from its official GitHub release.".to_string()
         }
     } else if !tools.ffmpeg_ready {
         if tools.ffmpeg_found {
-            "FFmpeg was found but did not respond to a version check. Install it again with WinGet, or use standard quality.".to_string()
+            "FFmpeg was found but did not respond to a version check. Reinstall it with WinGet, refresh it from GitHub, or use standard quality.".to_string()
         } else {
             "HD quality needs a working FFmpeg. Tick HD and install it with WinGet, or use standard quality.".to_string()
         }
@@ -234,14 +276,18 @@ fn tool_hint(tools: &DownloaderTools) -> String {
 }
 
 fn checked_tools(app: &AppHandle) -> DownloaderTools {
-    let mut tools = locate_tools(app);
-    if let Some(path) = tools.yt_dlp_path.as_deref() {
-        tools.yt_dlp_ready = probe_tool(path, "--version");
-    }
-    if let Some(path) = tools.ffmpeg_path.as_deref() {
-        tools.ffmpeg_ready = probe_tool(path, "-version");
-    }
-    tools.hd_ready = tools.ffmpeg_ready;
+    let (yt_dlp_ready, yt_dlp_path) = probe_tool_candidates(app, "yt-dlp", "--version");
+    let (ffmpeg_ready, ffmpeg_path) = probe_tool_candidates(app, "ffmpeg", "-version");
+    let mut tools = DownloaderTools {
+        yt_dlp_found: yt_dlp_path.is_some(),
+        yt_dlp_ready,
+        ffmpeg_found: ffmpeg_path.is_some(),
+        ffmpeg_ready,
+        hd_ready: ffmpeg_ready,
+        hint: String::new(),
+        yt_dlp_path,
+        ffmpeg_path,
+    };
     tools.hint = tool_hint(&tools);
     tools
 }
@@ -321,20 +367,28 @@ fn failure_hint(line: &str) -> Option<&'static str> {
     let lower = line.to_ascii_lowercase();
     if lower.contains("private") {
         Some("This link is private or sign-in-only. Use a public video or playlist; private links need a YouTube sign-in.")
+    } else if lower.contains("ffmpeg") && (lower.contains("error") || lower.contains("failed") || lower.contains("dll") || lower.contains("not found")) {
+        Some("FFmpeg could not merge the HD formats. Reinstall it with WinGet, refresh it from GitHub, or use standard quality.")
     } else if lower.contains("video unavailable") || lower.contains("has been removed") || lower.contains("is not available") || lower.contains("not found") || lower.contains("does not exist") {
         Some("This video is unavailable or has been removed.")
     } else if lower.contains("sign in") || lower.contains("captcha") || lower.contains("bot") || lower.contains("human") || lower.contains("age-restricted") || lower.contains("members") {
         Some("YouTube asked for a sign-in or membership. Use a public link or try again later.")
-    } else if lower.contains("unsupported url") || lower.contains("not a valid url") || lower.contains("unable to extract") || lower.contains("no video formats") {
+    } else if lower.contains("unsupported url") || lower.contains("not a valid url") || lower.contains("no video formats") {
         Some("This link is not a supported YouTube video or playlist.")
-    } else if lower.contains("requested format") || lower.contains("format is not available") {
-        Some("No Cast-friendly format was offered for this video. Try standard quality or another public link.")
+    } else if lower.contains("please report this issue") || lower.contains("extractorerror") || lower.contains("unable to extract")
+        || (lower.contains("yt-dlp") && (lower.contains("update") || lower.contains("outdated") || lower.contains("newer"))) {
+        Some("yt-dlp could not read this page. Refresh it with Prepare from GitHub or WinGet, then try again.")
     } else if lower.contains("rate limit") || lower.contains("too many") {
         Some("YouTube is rate-limiting this PC. Wait a few minutes and try again.")
-    } else if lower.contains("yt-dlp") && (lower.contains("update") || lower.contains("outdated") || lower.contains("newer")) {
-        Some("yt-dlp is out of date. Install the latest version with WinGet and try again.")
+    } else if lower.contains("unable to download") || lower.contains("connection") || lower.contains("timed out") || lower.contains("timeout")
+        || lower.contains("ssl") || lower.contains("tls") || lower.contains("network") || lower.contains("dns") {
+        Some("A network error stopped the download. Check your connection and try again.")
     } else if lower.contains("http error 403") || lower.contains("forbidden") {
-        Some("YouTube refused the download. Try again later or update yt-dlp with WinGet.")
+        Some("YouTube refused the download. Try again later or refresh yt-dlp with Prepare from GitHub.")
+    } else if lower.contains("requested format") || lower.contains("format is not available") {
+        Some("No Cast-friendly format was offered for this video. Try standard quality or another public link.")
+    } else if lower.contains("http error") || lower.contains("http 5") {
+        Some("YouTube returned an HTTP error. Try again later.")
     } else {
         None
     }
@@ -471,24 +525,38 @@ fn run_downloads(
                 return;
             }
         };
-        if let Some(stdout) = child.stdout.take() {
+        // yt-dlp reports some failures on stdout and others on stderr, so both
+        // streams are classified. Raw output can contain URLs or paths; only
+        // fixed hints are forwarded and unmapped lines are redacted in diagnostics.
+        let stdout_thread = child.stdout.take().map(|stdout| {
             let progress_app = app.clone();
             let progress_cancel = Arc::clone(&cancel);
             let activity = Arc::clone(&last_activity);
+            let failure_hint_ref = Arc::clone(&failure);
+            let log_app = app.clone();
             std::thread::spawn(move || {
+                let mut logged_unmapped = false;
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                     activity.store(now_millis(), Ordering::Relaxed);
                     if progress_cancel.load(Ordering::Relaxed) {
                         break;
                     }
+                    if let Some(hint) = failure_hint(&line) {
+                        if let Ok(mut slot) = failure_hint_ref.lock() {
+                            if slot.is_none() {
+                                *slot = Some(hint);
+                            }
+                        }
+                    } else if !logged_unmapped && line.to_ascii_lowercase().contains("error") {
+                        logged_unmapped = true;
+                        log_unmapped_error(&log_app, &line);
+                    }
                     if let Some(update) = progress_line(&line, index, total) {
                         let _ = progress_app.emit(PROGRESS_EVENT, update);
                     }
                 }
-            });
-        }
-        // Drain stderr so a full pipe cannot block the download. Raw tool
-        // output can contain URLs or paths; only fixed hints are forwarded.
+            })
+        });
         let stderr_thread = child.stderr.take().map(|stderr| {
             let failure_hint_ref = Arc::clone(&failure);
             let log_app = app.clone();
@@ -531,16 +599,26 @@ fn run_downloads(
             }
             std::thread::sleep(POLL_INTERVAL);
         };
+        // Join both readers before reading the hint slot: the final error line
+        // can arrive just as the process exits.
+        if let Some(thread) = stdout_thread {
+            let _ = thread.join();
+        }
         if let Some(thread) = stderr_thread {
             let _ = thread.join();
         }
         if !status.success() {
+            let exit_code = status.code();
             let detail = failure
                 .lock()
                 .ok()
                 .and_then(|slot| *slot)
-                .unwrap_or("Download failed. Check the link and update yt-dlp");
-            emit(&app, index, total, "failed", detail);
+                .map(str::to_string)
+                .unwrap_or_else(|| format!(
+                    "yt-dlp exited with code {}. Refresh it with Prepare from GitHub or WinGet, then retry.",
+                    exit_code.unwrap_or(-1)
+                ));
+            emit(&app, index, total, "failed", &detail);
             return;
         }
         emit(&app, index, total, "complete", "Download finished");
@@ -771,6 +849,50 @@ mod tests {
 
         let ready = fake_tools(true, true);
         assert!(tool_hint(&ready).is_empty());
+    }
+
+    #[test]
+    fn candidate_order_prefers_app_local_over_winget_and_path() {
+        let unique = std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("rollaplay-candidates-{unique}"));
+        let app_local = root.join("local");
+        let winget = root.join("winget");
+        let path_directory = root.join("path");
+        let package = winget.join(r"Microsoft\WinGet\Packages\yt-dlp\current");
+        for directory in [app_local.join("bin"), package.clone(), path_directory.clone()] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let app_exe = app_local.join("bin").join("yt-dlp.exe");
+        let winget_exe = package.join("yt-dlp.exe");
+        let path_exe = path_directory.join("yt-dlp.exe");
+        for executable in [&app_exe, &winget_exe, &path_exe] {
+            std::fs::write(executable, b"stub").unwrap();
+        }
+
+        let candidates = candidate_paths(
+            Some(app_local),
+            Some(winget.into_os_string()),
+            Some(path_directory.into_os_string()),
+            "yt-dlp",
+        );
+        let existing = candidates.into_iter().filter(|path| path.is_file()).collect::<Vec<_>>();
+        assert_eq!(existing, vec![app_exe, winget_exe, path_exe]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn classifies_network_ffmpeg_and_stale_tool_failures_without_echoing_output() {
+        let network = failure_hint("ERROR: Unable to download webpage: <urlopen error [SSL: CERTIFICATE_VERIFY_FAILED]>").unwrap();
+        assert!(network.contains("network error"));
+        let ffmpeg = failure_hint("ERROR: [ffmpeg] ffmpeg.exe: dll load failed F:\\secret").unwrap();
+        assert!(ffmpeg.contains("FFmpeg"));
+        let stale = failure_hint("ERROR: Please report this issue on https://github.com/yt-dlp/yt-dlp").unwrap();
+        assert!(stale.contains("Refresh it"));
+        for hint in [network, ffmpeg, stale] {
+            assert!(!hint.contains("http"));
+            assert!(!hint.contains("F:"));
+        }
+        assert!(failure_hint("[download] Destination: F:\\secret\\clip.mp4").is_none());
     }
 
     #[test]

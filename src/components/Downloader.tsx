@@ -109,7 +109,9 @@ export default function Downloader() {
         result = await prepareTools(wantHd)
       }
       setTools(result)
-      setInstallDetail('yt-dlp and FFmpeg responded to their version checks.')
+      setInstallDetail(result.yt_dlp_ready && (!wantHd || result.ffmpeg_ready)
+        ? 'yt-dlp and FFmpeg responded to their version checks.'
+        : 'yt-dlp responded to its version check.')
       return result
     })()
     provisionRef.current = task
@@ -153,6 +155,9 @@ export default function Downloader() {
       } else if (update.phase === 'failed') {
         setBusy(false)
         setError(update.detail || 'A download failed. Check the link, then try again.')
+        // A tool can be marked ready by a shallow version check and still fail
+        // on a real link. Refresh the pills so they reflect a fresh probe.
+        void getDownloaderTools().then(setTools).catch(() => {})
       } else if (update.phase === 'cancelled') {
         setBusy(false)
         setNotice('Download cancelled. Already downloaded files were kept.')
@@ -218,8 +223,8 @@ export default function Downloader() {
     setProgress({})
     setBusy(false)
     try {
-      let current = tools
-      if (!current) current = await getDownloaderTools()
+      // Always re-probe: cached flags can outlive a tool that stopped working.
+      const current = await getDownloaderTools()
       const ready = await provisionTools(current, hd)
       if (!ready.yt_dlp_ready || (hd && !ready.ffmpeg_ready)) {
         throw new Error('Downloader tools are still not ready. Install them with WinGet and try again.')
@@ -233,7 +238,7 @@ export default function Downloader() {
       setNotice('')
       setError(friendlyError(downloadError))
     }
-  }, [folder, hd, linksText, tools, provisionTools])
+  }, [folder, hd, linksText, provisionTools])
 
   const cancel = useCallback(async () => {
     try {
@@ -324,7 +329,7 @@ export default function Downloader() {
               {busy ? 'Downloading…' : 'Download'}
             </button>
             {busy && <button className="folder-cancel" onClick={() => void cancel()}><X size={15} /> Cancel</button>}
-            {needsTools && !busy && <button className="folder-action" onClick={() => void prepare()} disabled={preparing}>{preparing ? 'Preparing…' : 'Prepare from GitHub'}</button>}
+            {!busy && <button className="folder-action" onClick={() => void prepare()} disabled={preparing}>{preparing ? 'Preparing…' : needsTools ? 'Prepare from GitHub' : 'Refresh tools from GitHub'}</button>}
           </div>
           <p className="download-hint">Only public videos and playlists can be downloaded. Private or sign-in-only links are not supported.</p>
           {tools?.hint && <p className="download-hint">{tools.hint}</p>}
