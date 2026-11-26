@@ -1,0 +1,19 @@
+{
+  "version": "0.4.5",
+  "notes": "## RollaPlay 0.4.5\n\nSigned Windows update. Published 2026-11-27.\n\n### Added\n\n- Downloader now has a **Maximum quality** selector: **Standard**, **720p max**, **1080p max** and **4K max**. Higher tiers pass real `height<=N` caps to yt-dlp, so files stay at or below the chosen resolution instead of always taking the largest source.\n- Retry and Skip keep the quality chosen for the original batch, so resumed links do not change resolution.\n\n### Changed\n\n- Default quality is now **1080p max** instead of the previous uncapped HD selection. 4K files are only requested when you choose **4K max**.\n- 4K sources that use AV1/VP9 can still be converted with the existing opt-in **TV-friendly MP4** option. FFmpeg remains manual-only; probing never installs tools.\n\nUpdates come from official GitHub Releases and are verified before installation. Nothing installs silently and your library, playlists and settings stay on this device.",
+  "pub_date": "2026-11-26T22:54:43.000Z",
+  "platforms": {
+    "windows-x86_64-nsis": {
+      "url": "https://github.com/redcodesick/RollaPlay/releases/download/v0.4.5/RollaPlay_0.4.5_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTZld6M0I0UmFPcHJsaGJzTHIzd29GaFBHMmpNcjZnZFlJcDY3WEk4SzFLUVlBOXdBTU9EVHFDakFPVXQ3L2R6M2pyQTR4NFhVQ3BaQWVtRVFuWVp1c29VL3RWR01iQkFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzMzNjc1CWZpbGU6Um9sbGFQbGF5XzAuNC41X3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjQuNQoyanlqVzRnNGdISVN0UUlkSmpVWC9wTEZVNURPMlZMeWFTUGNSR0s0NzFKNXpQZ2trMlFodXRaK1ZJZjZzMlZ2bWc1WG9sUXlVOEFxUjhKM3NFZllBQT09Cg=="
+    },
+    "windows-x86_64-msi": {
+      "url": "https://github.com/redcodesick/RollaPlay/releases/download/v0.4.5/RollaPlay_0.4.5_x64_en-US.msi",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTZld6M0I0UmFPcG1hbzdaOVRuN0hwUzRLazhsVE5NSmdGb0lKVlJNb3NEQ3YzUFNMelEwZW5nWEtjckNPTXc4TGZUK2xYMDFjaGRZRlozUzVySUptT055a2hER0Q0UUE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzMzNjc1CWZpbGU6Um9sbGFQbGF5XzAuNC41X3g2NF9lbi1VUy5tc2kJdmVyc2lvbjowLjQuNQphdDQ0emRnd1JXYXNHWVVWUWpMNzV0clBYc0QxTU8yYi9La0FJRFgwS24ranh1aTFvMW1EMXlsRTVMVG1oQ09nUTZ3cWEvN1NuUHFDSTBWUXQveHFDdz09Cg=="
+    },
+    "windows-x86_64": {
+      "url": "https://github.com/redcodesick/RollaPlay/releases/download/v0.4.5/RollaPlay_0.4.5_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTZld6M0I0UmFPcHJsaGJzTHIzd29GaFBHMmpNcjZnZFlJcDY3WEk4SzFLUVlBOXdBTU9EVHFDakFPVXQ3L2R6M2pyQTR4NFhVQ3BaQWVtRVFuWVp1c29VL3RWR01iQkFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzMzNjc1CWZpbGU6Um9sbGFQbGF5XzAuNC41X3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjQuNQoyanlqVzRnNGdISVN0UUlkSmpVWC9wTEZVNURPMlZMeWFTUGNSR0s0NzFKNXpQZ2trMlFodXRaK1ZJZjZzMlZ2bWc1WG9sUXlVOEFxUjhKM3NFZllBQT09Cg=="
+    }
+  }
+}
