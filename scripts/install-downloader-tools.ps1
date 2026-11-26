@@ -37,6 +37,7 @@ function Save-Release {
 $ytdlp = Join-Path $TargetDirectory 'yt-dlp.exe'
 Save-Release -Url 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe' -Destination $ytdlp
 Write-Output 'yt-dlp is ready'
+Write-Output 'STEP|1|yt-dlp is ready'
 
 if ($IncludeFFmpeg) {
     $archive = Join-Path $TargetDirectory 'ffmpeg-release.zip'
@@ -52,6 +53,7 @@ if ($IncludeFFmpeg) {
     Remove-Item -LiteralPath $extract -Recurse -Force
     Remove-Item -LiteralPath $archive -Force
     Write-Output 'FFmpeg is ready'
+    Write-Output 'STEP|2|FFmpeg is ready'
 }
 
 Write-Output 'TOOLS_READY'

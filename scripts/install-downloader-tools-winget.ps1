@@ -37,7 +37,7 @@ function Write-SafeLine {
 }
 
 function Ensure-Package {
-    param([string] $Id, [string] $Label)
+    param([string] $Id, [string] $Label, [int] $Step)
     Write-SafeLine "Installing $Label with WinGet"
     $script:installNote = ''
     & $winget install --id $Id --exact --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity 2>&1 | ForEach-Object {
@@ -52,6 +52,7 @@ function Ensure-Package {
         throw "WinGet could not install $Label"
     }
     Write-SafeLine "$Label is ready"
+    Write-Output "STEP|$Step|$Label is ready"
 }
 
 $winget = Find-Winget
@@ -60,7 +61,7 @@ if (-not $winget) {
     exit 1
 }
 
-if ($InstallYtDlp) { Ensure-Package 'yt-dlp.yt-dlp' 'yt-dlp' }
-if ($InstallFfmpeg) { Ensure-Package 'yt-dlp.FFmpeg' 'FFmpeg' }
+if ($InstallYtDlp) { Ensure-Package 'yt-dlp.yt-dlp' 'yt-dlp' 1 }
+if ($InstallFfmpeg) { Ensure-Package 'yt-dlp.FFmpeg' 'FFmpeg' 2 }
 
 Write-SafeLine 'TOOLS_READY'

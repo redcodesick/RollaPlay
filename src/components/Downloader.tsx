@@ -22,6 +22,8 @@ const storedUi = {
   busy: false,
   preparing: false,
   installDetail: '',
+  installStep: 0,
+  installTotal: 1,
   progress: {} as Record<number, DownloadProgress>,
   error: '',
   notice: '',
@@ -42,13 +44,13 @@ export default function Downloader() {
   const [busy, setBusy] = useState(storedUi.busy)
   const [preparing, setPreparing] = useState(storedUi.preparing)
   const [installDetail, setInstallDetail] = useState(storedUi.installDetail)
+  const [installStep, setInstallStep] = useState(storedUi.installStep)
+  const [installTotal, setInstallTotal] = useState(storedUi.installTotal)
   const [progress, setProgress] = useState<Record<number, DownloadProgress>>(storedUi.progress)
   const [error, setError] = useState(storedUi.error)
   const [notice, setNotice] = useState(storedUi.notice)
   const completedRef = useRef<Set<number>>(storedUi.completed)
   const indexedRef = useRef(storedUi.indexed)
-  const autoCheckRef = useRef(false)
-  const provisionRef = useRef<Promise<DownloaderTools> | null>(null)
 
   useEffect(() => {
     storedUi.folder = folder
@@ -61,12 +63,14 @@ export default function Downloader() {
     storedUi.busy = busy
     storedUi.preparing = preparing
     storedUi.installDetail = installDetail
+    storedUi.installStep = installStep
+    storedUi.installTotal = installTotal
     storedUi.progress = progress
     storedUi.error = error
     storedUi.notice = notice
     storedUi.completed = completedRef.current
     storedUi.indexed = indexedRef.current
-  }, [folder, linksText, hd, tvCompatible, installYtDlp, installFfmpeg, tools, busy, preparing, installDetail, progress, error, notice])
+  }, [folder, linksText, hd, tvCompatible, installYtDlp, installFfmpeg, tools, busy, preparing, installDetail, installStep, installTotal, progress, error, notice])
 
   const addToLibrary = useCallback(async () => {
     if (indexedRef.current || !folder) return
@@ -92,56 +96,14 @@ export default function Downloader() {
   const addToLibraryRef = useRef(addToLibrary)
   useEffect(() => { addToLibraryRef.current = addToLibrary }, [addToLibrary])
 
-  // One shared check so the mount effect and the Download button can never
-  // start two installers at the same time. WinGet first, GitHub as fallback.
-  const provisionTools = useCallback((current: DownloaderTools | null, wantFfmpeg: boolean) => {
-    const needYtDlp = !current?.yt_dlp_ready
-    const needFfmpeg = wantFfmpeg && !current?.ffmpeg_ready
-    if (!needYtDlp && !needFfmpeg && current) return Promise.resolve(current)
-    if (provisionRef.current) return provisionRef.current
-
-    const task = (async () => {
-      setPreparing(true)
-      setInstallDetail('Checking downloader tools…')
-      let result: DownloaderTools
-      try {
-        result = await installToolsWinget(needYtDlp, needFfmpeg)
-      } catch (wingetError) {
-        diagnosticError('downloader', 'winget_auto_install_failed', wingetError, { needYtDlp, needFfmpeg })
-        setInstallDetail('WinGet was unavailable; fetching official releases instead.')
-        result = await prepareTools(wantFfmpeg)
-      }
-      setTools(result)
-      setInstallDetail(result.yt_dlp_ready && (!wantFfmpeg || result.ffmpeg_ready)
-        ? 'yt-dlp and FFmpeg responded to their version checks.'
-        : 'yt-dlp responded to its version check.')
-      return result
-    })()
-    provisionRef.current = task
-    void task.finally(() => { provisionRef.current = null }).catch(() => {})
-    return task
-  }, [])
-
   useEffect(() => {
     if (!isDesktop) return
     let disposed = false
     const stops: Array<() => void> = []
+    // Probing never installs. Tools are only fetched when the user presses a
+    // button below, so opening the Downloader is always a read-only check.
     void getDownloaderTools()
-      .then(async (result) => {
-        if (disposed) return
-        setTools(result)
-        if (autoCheckRef.current) return
-        autoCheckRef.current = true
-        if (result.yt_dlp_ready && result.ffmpeg_ready) return
-        try {
-          await provisionTools(result, true)
-          if (!disposed) setNotice('Downloader tools are ready.')
-        } catch (provisionError) {
-          if (disposed) return
-          diagnosticError('downloader', 'auto_tool_check_failed', provisionError)
-          setError('Some downloader tools are missing or not working. Press Install selected with WinGet to fix them.')
-        }
-      })
+      .then((result) => { if (!disposed) setTools(result) })
       .catch((loadError) => diagnosticError('downloader', 'tools_load_failed', loadError))
 
     void onDownloadProgress((update) => {
@@ -160,7 +122,7 @@ export default function Downloader() {
         setError(update.detail || 'A download failed. Check the link, then try again.')
         // A tool can be marked ready by a shallow version check and still fail
         // on a real link. Refresh the pills so they reflect a fresh probe.
-        void getDownloaderTools().then(setTools).catch(() => {})
+        void getDownloaderTools().then((result) => { if (!disposed) setTools(result) }).catch(() => {})
       } else if (update.phase === 'cancelled') {
         setBusy(false)
         setNotice('Download cancelled. Already downloaded files were kept.')
@@ -169,12 +131,17 @@ export default function Downloader() {
 
     void onToolInstallProgress((update) => {
       if (disposed) return
+      const total = Math.max(1, update.total || 1)
       setInstallDetail(update.detail)
-      if (update.phase === 'complete') void getDownloaderTools().then(setTools).catch(() => {})
+      setInstallTotal(total)
+      setInstallStep(Math.max(0, Math.min(total, update.step || 0)))
+      if (update.phase === 'complete') {
+        void getDownloaderTools().then((result) => { if (!disposed) setTools(result) }).catch(() => {})
+      }
     }).then((stop) => { if (disposed) stop(); else stops.push(stop) }).catch((listenError) => diagnosticError('downloader', 'install_listener_failed', listenError))
 
     return () => { disposed = true; stops.forEach((stop) => stop()) }
-  }, [isDesktop, provisionTools])
+  }, [isDesktop])
 
   const pickFolder = useCallback(async () => {
     setError('')
@@ -185,7 +152,10 @@ export default function Downloader() {
   const prepare = useCallback(async () => {
     setPreparing(true)
     setError('')
+    setNotice('')
     setInstallDetail('')
+    setInstallStep(0)
+    setInstallTotal(1)
     const wantFfmpeg = hd || tvCompatible
     try {
       const result = await prepareTools(wantFfmpeg)
@@ -204,6 +174,8 @@ export default function Downloader() {
     setError('')
     setNotice('')
     setInstallDetail('')
+    setInstallStep(0)
+    setInstallTotal(1)
     try {
       const result = await installToolsWinget(installYtDlp, installFfmpeg)
       setTools(result)
@@ -227,12 +199,17 @@ export default function Downloader() {
     setProgress({})
     setBusy(false)
     try {
-      // Always re-probe: cached flags can outlive a tool that stopped working.
+      // Re-probe, but never install: a missing tool must be installed by the
+      // user with the buttons in this view before a download can start.
       const current = await getDownloaderTools()
+      setTools(current)
       const wantFfmpeg = hd || tvCompatible
-      const ready = await provisionTools(current, wantFfmpeg)
-      if (!ready.yt_dlp_ready || (wantFfmpeg && !ready.ffmpeg_ready)) {
-        throw new Error('Downloader tools are still not ready. Install them with WinGet and try again.')
+      const missing: string[] = []
+      if (!current.yt_dlp_ready) missing.push('yt-dlp')
+      if (wantFfmpeg && !current.ffmpeg_ready) missing.push('FFmpeg')
+      if (missing.length) {
+        setError(`Install ${missing.join(' and ')} below first. RollaPlay only downloads tools when you press an install button.`)
+        return
       }
       setBusy(true)
       setNotice(tvCompatible
@@ -245,7 +222,7 @@ export default function Downloader() {
       setNotice('')
       setError(friendlyError(downloadError))
     }
-  }, [folder, hd, tvCompatible, linksText, provisionTools])
+  }, [folder, hd, tvCompatible, linksText])
 
   const cancel = useCallback(async () => {
     try {
@@ -264,6 +241,7 @@ export default function Downloader() {
   const toolLabel = (found?: boolean, ready?: boolean) => ready ? 'ready' : found ? 'not responding' : 'not installed'
   const toolClass = (ready?: boolean, found?: boolean) => ready ? 'ok' : found ? 'warn' : ''
   const orderedProgress = Object.values(progress).sort((a, b) => a.index - b.index)
+  const installPercent = Math.max(0, Math.min(100, Math.round((installStep / Math.max(1, installTotal)) * 100)))
   const completedCount = orderedProgress.filter((item) => item.phase === 'complete').length
   const failedCount = orderedProgress.filter((item) => item.phase === 'failed').length
   const cancelledCount = orderedProgress.filter((item) => item.phase === 'cancelled').length
@@ -362,8 +340,12 @@ export default function Downloader() {
             <span className={`status-pill ${toolClass(tools?.yt_dlp_ready, tools?.yt_dlp_found)}`}><span className="status-dot" /> yt-dlp {toolLabel(tools?.yt_dlp_found, tools?.yt_dlp_ready)}</span>
             <span className={`status-pill ${toolClass(tools?.ffmpeg_ready, tools?.ffmpeg_found)}`}><span className="status-dot" /> FFmpeg {toolLabel(tools?.ffmpeg_found, tools?.ffmpeg_ready)}</span>
           </div>
-          <p className="download-hint">RollaPlay checks both tools before every download and installs anything that is missing or not responding.</p>
-          {installDetail && <div className="download-install-detail">{installDetail}</div>}
+          <p className="download-hint">RollaPlay checks both tools but never installs them by itself. Use the buttons to install or refresh; each step shows its progress here.</p>
+          {installDetail && <div className="download-install-detail">
+            <span>{installDetail}</span>
+            <span className="download-progress-track"><span style={{ width: `${installPercent}%` }} /></span>
+            <span className="download-progress-percent">{installTotal > 1 ? `Step ${installStep} of ${installTotal}` : 'Installing'}</span>
+          </div>}
           {orderedProgress.length > 0 && <div className="download-progress-list">
             {orderedProgress.map((item) => (
               <div key={item.index} className={`download-progress-row phase-${item.phase}`}>

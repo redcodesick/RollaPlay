@@ -63,7 +63,7 @@ Unify the existing app into one premium, warm, high-contrast Windows media-cente
 ## Phase F — Downloader and Settings
 
 - Focus the Downloader on URL input, destination, quality, action, real progress, completed downloads, tool status, and Standard vs HD explanation.
-- Preserve tool auto-install, private-link errors, library scan/add behavior, and live progress events.
+- Preserve manual tool install, private-link errors, library scan/add behavior, and live progress events for downloads and tool installs.
 - Reorganize Settings into General, Media Library, Playback, Network and Cast, Downloader, Diagnostics, and About sections without removing existing diagnostics or exposing credentials/paths.
 - Verify with `pnpm build`.
 

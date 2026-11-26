@@ -23,6 +23,8 @@ export type DownloadProgress = {
 export type ToolInstallProgress = {
   phase: 'starting' | 'output' | 'complete' | 'failed'
   detail: string
+  step: number
+  total: number
 }
 
 export const getDownloaderTools = () =>

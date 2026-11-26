@@ -4,9 +4,9 @@
 //! merges separate AVC/AAC streams with FFmpeg. The opt-in TV-compatible mode
 //! checks the real streams and re-encodes only unsupported files to H.264/AAC
 //! MP4, replacing the original after the result is verified. Tools are never
-//! bundled: they
-//! are installed into app-local data from their official GitHub releases or,
-//! when ticked in the UI, with WinGet. Discovery always prefers that app-local
+//! bundled: they are installed only when the user presses an install button,
+//! into app-local data from their official GitHub releases or with WinGet.
+//! Discovery always prefers that app-local
 //! copy so a stale WinGet folder cannot shadow a known-good tool. Whole
 //! playlists are downloaded into the folder chosen in the UI. The child process
 //! is launched without a shell and no URL or filesystem path is ever written
@@ -19,7 +19,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant, UNIX_EPOCH},
@@ -68,6 +68,9 @@ pub struct DownloadProgress {
 pub struct ToolInstallProgress {
     pub phase: &'static str,
     pub detail: String,
+    /// Real installation milestones completed so far, not a timed estimate.
+    pub step: usize,
+    pub total: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -1028,12 +1031,34 @@ pub fn cancel_download(state: State<'_, DownloadState>) -> bool {
     state.cancel()
 }
 
+/// Reads a fixed milestone emitted by the tool installer scripts. The detail
+/// is allow-listed in the same way as other tool output: no URLs, paths,
+/// credentials or raw script text can reach the UI.
+fn tool_step_line(line: &str) -> Option<(usize, String)> {
+    let rest = line.trim().strip_prefix("STEP|")?;
+    let mut parts = rest.splitn(2, '|');
+    let step = parts.next()?.parse::<usize>().ok()?;
+    let detail = parts.next()?.trim();
+    if detail.is_empty()
+        || detail.len() > 120
+        || detail.contains("http")
+        || detail.contains(":\\")
+        || detail.contains("\\\\")
+        || detail.to_ascii_lowercase().contains("token")
+        || detail.to_ascii_lowercase().contains("password")
+    {
+        return None;
+    }
+    Some((step, detail.to_string()))
+}
+
 async fn run_tool_installer(
     app: &AppHandle,
     script_name: &str,
     script: &str,
     args: Vec<OsString>,
     starting_detail: &str,
+    total_steps: usize,
 ) -> Result<(), String> {
     let directory = tools_directory(app)?;
     let script_path = directory.join(script_name);
@@ -1042,10 +1067,14 @@ async fn run_tool_installer(
     let shell = powershell().ok_or_else(|| "Windows PowerShell is unavailable".to_string())?;
     let installer_app = app.clone();
     let starting = starting_detail.to_string();
+    let last_step = Arc::new(AtomicUsize::new(0));
     tauri::async_runtime::spawn_blocking(move || {
+        let step_counter = Arc::clone(&last_step);
         let _ = installer_app.emit(INSTALL_EVENT, ToolInstallProgress {
             phase: "starting",
             detail: starting,
+            step: 0,
+            total: total_steps,
         });
         let mut command = Command::new(shell);
         command
@@ -1059,17 +1088,35 @@ async fn run_tool_installer(
         let mut child = command.spawn().map_err(|_| "Could not start the tool installer".to_string())?;
         let stdout_thread = child.stdout.take().map(|stdout| {
             let emit_app = installer_app.clone();
+            let milestone = Arc::clone(&step_counter);
             std::thread::spawn(move || {
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                     let detail = line.trim();
-                    // The scripts print generic lines; still drop anything
+                    if let Some((step, step_detail)) = tool_step_line(detail) {
+                        milestone.store(step.min(total_steps), Ordering::Relaxed);
+                        let _ = emit_app.emit(INSTALL_EVENT, ToolInstallProgress {
+                            phase: "output",
+                            detail: step_detail,
+                            step: milestone.load(Ordering::Relaxed),
+                            total: total_steps,
+                        });
+                        continue;
+                    }
+                    // Other script lines are generic status only. Drop anything
                     // that could contain a URL, a path or a credential.
-                    if detail.is_empty() || detail.len() > 120 || detail.contains("http") || detail.contains(":\\") {
+                    if detail.is_empty()
+                        || detail == "TOOLS_READY"
+                        || detail.len() > 120
+                        || detail.contains("http")
+                        || detail.contains(":\\")
+                    {
                         continue;
                     }
                     let _ = emit_app.emit(INSTALL_EVENT, ToolInstallProgress {
                         phase: "output",
                         detail: detail.to_string(),
+                        step: milestone.load(Ordering::Relaxed),
+                        total: total_steps,
                     });
                 }
             })
@@ -1079,15 +1126,20 @@ async fn run_tool_installer(
             let _ = thread.join();
         }
         if status.success() {
+            step_counter.store(total_steps, Ordering::Relaxed);
             let _ = installer_app.emit(INSTALL_EVENT, ToolInstallProgress {
                 phase: "complete",
                 detail: "Downloader tools are ready".to_string(),
+                step: total_steps,
+                total: total_steps,
             });
             Ok(())
         } else {
             let _ = installer_app.emit(INSTALL_EVENT, ToolInstallProgress {
                 phase: "failed",
                 detail: "Tool installation failed".to_string(),
+                step: step_counter.load(Ordering::Relaxed),
+                total: total_steps,
             });
             Err("Tool installation failed. Check your internet connection and try again.".to_string())
         }
@@ -1106,7 +1158,8 @@ pub async fn prepare_tools(app: AppHandle, include_ffmpeg: bool) -> Result<Downl
         args.push(OsString::from("-IncludeFFmpeg"));
     }
     let starting = if include_ffmpeg { "Preparing yt-dlp and FFmpeg" } else { "Preparing yt-dlp" };
-    run_tool_installer(&app, "install-downloader-tools.ps1", INSTALL_SCRIPT, args, starting).await?;
+    let total_steps = if include_ffmpeg { 2 } else { 1 };
+    run_tool_installer(&app, "install-downloader-tools.ps1", INSTALL_SCRIPT, args, starting, total_steps).await?;
     let tools = current_tools(&app).await;
     if !tools.yt_dlp_ready || (include_ffmpeg && !tools.ffmpeg_ready) {
         return Err("The downloaded tools did not respond to a version check. Try WinGet instead.".to_string());
@@ -1131,12 +1184,14 @@ pub async fn install_tools_winget(
     if args.is_empty() {
         return Err("Select at least one tool to install.".to_string());
     }
+    let total_steps = if install_yt_dlp { 1 } else { 0 } + if install_ffmpeg { 1 } else { 0 };
     run_tool_installer(
         &app,
         "install-downloader-tools-winget.ps1",
         WINGET_SCRIPT,
         args,
         "Installing selected tools with WinGet",
+        total_steps,
     )
     .await?;
     let tools = current_tools(&app).await;
@@ -1185,6 +1240,21 @@ mod tests {
         assert_eq!(displayed_percent("converting"), None);
         assert_eq!(displayed_percent("complete"), Some(100));
         assert_eq!(displayed_percent("failed"), Some(0));
+    }
+
+    #[test]
+    fn tool_progress_markers_are_fixed_and_redacted() {
+        assert_eq!(
+            tool_step_line("STEP|1|yt-dlp is ready"),
+            Some((1, "yt-dlp is ready".to_string()))
+        );
+        assert_eq!(
+            tool_step_line("STEP|2|FFmpeg is ready"),
+            Some((2, "FFmpeg is ready".to_string()))
+        );
+        assert!(tool_step_line("STEP|1|https://github.com/secret").is_none());
+        assert!(tool_step_line(r"STEP|1|F:\secret\tool.exe").is_none());
+        assert!(tool_step_line("STEP|1|token=secret").is_none());
     }
 
     #[test]

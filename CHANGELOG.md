@@ -4,6 +4,14 @@ All notable changes to RollaPlay are documented here. The format follows [Keep a
 
 ## [Unreleased]
 
+### Added
+
+- Tool installation now shows a real step-by-step progress bar for both WinGet and GitHub installs, with fixed milestone labels and no paths, URLs or raw script output.
+
+### Changed
+
+- yt-dlp and FFmpeg are no longer downloaded or installed automatically. Opening the Downloader or starting a download only probes the tools; a missing or broken tool blocks the download with guidance to use the explicit install buttons.
+
 ### Fixed
 
 - Downloader progress now reads yt-dlp's real `[download] NN%` lines from **stderr** as well as stdout, so the status bar advances during a transfer instead of staying at 0% ([#4](https://github.com/redcodesick/RollaPlay/issues/4)). Starting and terminal phases no longer display a misleading 0% bar.
