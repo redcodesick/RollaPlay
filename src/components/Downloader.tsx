@@ -1,14 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSWRConfig } from 'swr'
 import { open } from '@tauri-apps/plugin-dialog'
-import { AlertCircle, Check, Download, FolderOpen, LoaderCircle, X } from 'lucide-react'
+import { AlertCircle, Check, Download, FolderOpen, LoaderCircle, RotateCcw, SkipForward, X } from 'lucide-react'
 import { getMediaDirectories, isDesktopApp, type MediaDirectory, type ScanResult } from '../media'
 import { debugLog, diagnosticError, friendlyError, invokeTracked } from '../diagnostics'
 import {
   cancelDownload, getDownloaderTools, installToolsWinget, onDownloadProgress, onToolInstallProgress,
   prepareTools, startDownload, type DownloadProgress, type DownloaderTools,
 } from '../downloader'
-import { clampedPercent, phaseLabel, progressCounter, progressIdentity } from '../downloader-progress'
+import {
+  clampedPercent, downloadsReadyToIndex, phaseLabel, progressCounter, progressIdentity,
+  resumeDownloadIndices,
+} from '../downloader-progress'
+
+type DownloadBatch = {
+  folder: string
+  urls: string[]
+  hd: boolean
+  tvCompatible: boolean
+  total: number
+}
 
 // The backend job outlives this view. Keep UI state in memory so switching
 // pages does not make an active download look like it vanished.
@@ -26,9 +37,9 @@ const storedUi = {
   installStep: 0,
   installTotal: 1,
   progress: {} as Record<number, DownloadProgress>,
+  batch: null as DownloadBatch | null,
   error: '',
   notice: '',
-  completed: new Set<number>(),
   indexed: false,
 }
 
@@ -48,9 +59,12 @@ export default function Downloader() {
   const [installStep, setInstallStep] = useState(storedUi.installStep)
   const [installTotal, setInstallTotal] = useState(storedUi.installTotal)
   const [progress, setProgress] = useState<Record<number, DownloadProgress>>(storedUi.progress)
+  const [batch, setBatch] = useState<DownloadBatch | null>(storedUi.batch)
   const [error, setError] = useState(storedUi.error)
   const [notice, setNotice] = useState(storedUi.notice)
-  const completedRef = useRef<Set<number>>(storedUi.completed)
+  const progressRef = useRef(storedUi.progress)
+  const batchRef = useRef(storedUi.batch)
+  const launchingRef = useRef(false)
   const indexedRef = useRef(storedUi.indexed)
 
   useEffect(() => {
@@ -67,20 +81,22 @@ export default function Downloader() {
     storedUi.installStep = installStep
     storedUi.installTotal = installTotal
     storedUi.progress = progress
+    storedUi.batch = batch
     storedUi.error = error
     storedUi.notice = notice
-    storedUi.completed = completedRef.current
     storedUi.indexed = indexedRef.current
-  }, [folder, linksText, hd, tvCompatible, installYtDlp, installFfmpeg, tools, busy, preparing, installDetail, installStep, installTotal, progress, error, notice])
+    progressRef.current = progress
+    batchRef.current = batch
+  }, [folder, linksText, hd, tvCompatible, installYtDlp, installFfmpeg, tools, busy, preparing, installDetail, installStep, installTotal, progress, batch, error, notice])
 
-  const addToLibrary = useCallback(async () => {
-    if (indexedRef.current || !folder) return
+  const addToLibrary = useCallback(async (directoryPath: string) => {
+    if (indexedRef.current || !directoryPath) return
     indexedRef.current = true
     try {
       const existing = await getMediaDirectories()
-      let directory: MediaDirectory | undefined = existing.find((entry) => entry.path === folder)
+      let directory: MediaDirectory | undefined = existing.find((entry) => entry.path === directoryPath)
       if (!directory) {
-        directory = await invokeTracked<MediaDirectory>('add_media_directory', { path: folder }, 'media-folders')
+        directory = await invokeTracked<MediaDirectory>('add_media_directory', { path: directoryPath }, 'media-folders')
       }
       const result = await invokeTracked<ScanResult>('scan_media_directory', { directoryId: directory.id }, 'media-folders')
       await Promise.all([
@@ -92,7 +108,7 @@ export default function Downloader() {
       diagnosticError('downloader', 'library_index_failed', indexError)
       setError('Downloads finished, but the folder could not be indexed. Scan it from Settings → Media folders.')
     }
-  }, [folder, globalMutate])
+  }, [globalMutate])
 
   const addToLibraryRef = useRef(addToLibrary)
   useEffect(() => { addToLibraryRef.current = addToLibrary }, [addToLibrary])
@@ -110,17 +126,17 @@ export default function Downloader() {
     void onDownloadProgress((update) => {
       if (disposed) return
       debugLog('downloader', 'progress_event', { index: update.index, phase: update.phase, percent: update.percent })
-      setProgress((current) => {
-        const previous = current[update.index]
-        const merged: DownloadProgress = { ...update, title: update.title || previous?.title || '' }
-        return { ...current, [update.index]: merged }
-      })
+      const previous = progressRef.current[update.index]
+      const merged: DownloadProgress = { ...update, title: update.title || previous?.title || '' }
+      const next = { ...progressRef.current, [update.index]: merged }
+      progressRef.current = next
+      setProgress(next)
+
       if (update.phase === 'complete') {
-        completedRef.current.add(update.index)
-        if (completedRef.current.size >= update.total) {
+        if (downloadsReadyToIndex(progressRef.current, update.total)) {
           setBusy(false)
           setNotice('Downloads finished. Adding them to your library…')
-          void addToLibraryRef.current()
+          void addToLibraryRef.current(batchRef.current?.folder ?? '')
         }
       } else if (update.phase === 'failed') {
         setBusy(false)
@@ -193,41 +209,120 @@ export default function Downloader() {
     }
   }, [installYtDlp, installFfmpeg])
 
-  const run = useCallback(async () => {
+  const launchBatch = useCallback(async (currentBatch: DownloadBatch, indices: number[]) => {
+    if (launchingRef.current || !indices.length) return
+    launchingRef.current = true
     setError('')
     setNotice('')
-    const urls = linksText.split(/[\r\n]+/).map((line) => line.trim()).filter(Boolean)
-    if (!folder) { setError('Choose a download folder first.'); return }
-    if (!urls.length) { setError('Paste at least one YouTube video or playlist link.'); return }
-    completedRef.current = new Set()
-    indexedRef.current = false
-    setProgress({})
-    setBusy(false)
     try {
       // Re-probe, but never install: a missing tool must be installed by the
       // user with the buttons in this view before a download can start.
       const current = await getDownloaderTools()
       setTools(current)
-      const wantFfmpeg = hd || tvCompatible
+      const wantFfmpeg = currentBatch.hd || currentBatch.tvCompatible
       const missing: string[] = []
       if (!current.yt_dlp_ready) missing.push('yt-dlp')
       if (wantFfmpeg && !current.ffmpeg_ready) missing.push('FFmpeg')
       if (missing.length) {
-        setError(`Install ${missing.join(' and ')} below first. RollaPlay only downloads tools when you press an install button.`)
-        return
+        throw new Error(`Install ${missing.join(' and ')} below first. RollaPlay only downloads tools when you press an install button.`)
       }
       setBusy(true)
-      setNotice(tvCompatible
+      setNotice(currentBatch.tvCompatible
         ? 'Downloading… TV-compatible files will replace the originals when verified.'
         : 'Downloading… your library will update when the videos are ready.')
-      await startDownload(folder, urls, hd, tvCompatible)
+      await startDownload({
+        directory: currentBatch.folder,
+        urls: indices.map((index) => currentBatch.urls[index]),
+        hd: currentBatch.hd,
+        tvCompatible: currentBatch.tvCompatible,
+        indices,
+        total: currentBatch.total,
+      })
+    } finally {
+      launchingRef.current = false
+    }
+  }, [])
+
+  const run = useCallback(async () => {
+    const urls = linksText.split(/[\r\n]+/).map((line) => line.trim()).filter(Boolean)
+    if (!folder) { setError('Choose a download folder first.'); return }
+    if (!urls.length) { setError('Paste at least one YouTube video or playlist link.'); return }
+    const nextBatch: DownloadBatch = { folder, urls, hd, tvCompatible, total: urls.length }
+    setBatch(nextBatch)
+    batchRef.current = nextBatch
+    indexedRef.current = false
+    const empty: Record<number, DownloadProgress> = {}
+    progressRef.current = empty
+    setProgress(empty)
+    try {
+      await launchBatch(nextBatch, urls.map((_, index) => index))
     } catch (downloadError) {
       diagnosticError('downloader', 'download_start_failed', downloadError, { hd, tvCompatible, linkCount: urls.length })
       setBusy(false)
       setNotice('')
       setError(friendlyError(downloadError))
     }
-  }, [folder, hd, tvCompatible, linksText])
+  }, [folder, hd, tvCompatible, linksText, launchBatch])
+
+  const retryAt = useCallback(async (index: number) => {
+    const currentBatch = batchRef.current
+    if (!currentBatch || busy || launchingRef.current) return
+    const indices = resumeDownloadIndices(progressRef.current, index, currentBatch.total, true)
+    if (!indices.length) return
+    debugLog('downloader', 'download_retry', { index, linkCount: indices.length })
+    const previous = progressRef.current[index]
+    const retrying: DownloadProgress = previous
+      ? { ...previous, phase: 'starting', detail: 'Retrying download', percent: null }
+      : { index, total: currentBatch.total, phase: 'starting', detail: 'Retrying download', percent: null, title: '' }
+    const marked = { ...progressRef.current, [index]: retrying }
+    progressRef.current = marked
+    setProgress(marked)
+    try {
+      await launchBatch(currentBatch, indices)
+    } catch (retryError) {
+      if (previous) {
+        const rollback = { ...progressRef.current, [index]: previous }
+        progressRef.current = rollback
+        setProgress(rollback)
+      }
+      diagnosticError('downloader', 'download_retry_failed', retryError, { index, linkCount: indices.length })
+      setBusy(false)
+      setNotice('')
+      setError(friendlyError(retryError))
+    }
+  }, [busy, launchBatch])
+
+  const skipAt = useCallback(async (index: number) => {
+    const currentBatch = batchRef.current
+    if (!currentBatch || busy || launchingRef.current) return
+    const indices = resumeDownloadIndices(progressRef.current, index, currentBatch.total, false)
+    debugLog('downloader', 'download_skip', { index, linkCount: indices.length })
+    const previous = progressRef.current[index]
+    const skipped: DownloadProgress = previous
+      ? { ...previous, phase: 'skipped', detail: 'Skipped — continuing with remaining links', percent: null }
+      : { index, total: currentBatch.total, phase: 'skipped', detail: 'Skipped — continuing with remaining links', percent: null, title: '' }
+    const marked = { ...progressRef.current, [index]: skipped }
+    progressRef.current = marked
+    setProgress(marked)
+    if (!indices.length) {
+      setBusy(false)
+      if (downloadsReadyToIndex(marked, currentBatch.total)) {
+        setNotice('Downloads finished. Adding them to your library…')
+        void addToLibraryRef.current(currentBatch.folder)
+      } else {
+        setNotice('Download skipped.')
+      }
+      return
+    }
+    try {
+      await launchBatch(currentBatch, indices)
+    } catch (skipError) {
+      diagnosticError('downloader', 'download_resume_failed', skipError, { index, linkCount: indices.length })
+      setBusy(false)
+      setNotice('')
+      setError(friendlyError(skipError))
+    }
+  }, [busy, launchBatch])
 
   const cancel = useCallback(async () => {
     try {
@@ -250,6 +345,7 @@ export default function Downloader() {
   const completedCount = orderedProgress.filter((item) => item.phase === 'complete').length
   const failedCount = orderedProgress.filter((item) => item.phase === 'failed').length
   const cancelledCount = orderedProgress.filter((item) => item.phase === 'cancelled').length
+  const skippedCount = orderedProgress.filter((item) => item.phase === 'skipped').length
 
   return (
     <section className="section-page downloader-page">
@@ -335,7 +431,7 @@ export default function Downloader() {
             {busy && <button className="folder-cancel" onClick={() => void cancel()}><X size={15} /> Cancel</button>}
             {!busy && <button className="folder-action" onClick={() => void prepare()} disabled={preparing}>{preparing ? 'Preparing…' : needsTools ? 'Prepare from GitHub' : 'Refresh tools from GitHub'}</button>}
           </div>
-          <p className="download-hint">Only public videos and playlists can be downloaded. Private or sign-in-only links are not supported.</p>
+          <p className="download-hint">Only public videos and playlists can be downloaded. Private or sign-in-only links are not supported. If a link fails, use Retry or Skip on its status row.</p>
           {tools?.hint && <p className="download-hint">{tools.hint}</p>}
         </div>
 
@@ -357,7 +453,13 @@ export default function Downloader() {
               const counter = progressCounter(item)
               return (
                 <div key={item.index} className={`download-progress-row phase-${item.phase}`}>
-                  <span className={`download-phase phase-${item.phase}`}>{item.phase === 'complete' ? <Check size={14} /> : item.phase === 'failed' ? <AlertCircle size={14} /> : item.phase === 'cancelled' ? <X size={14} /> : <LoaderCircle size={14} className="spin-icon" />}</span>
+                  <span className={`download-phase phase-${item.phase}`}>
+                    {item.phase === 'complete' ? <Check size={14} />
+                      : item.phase === 'failed' ? <AlertCircle size={14} />
+                        : item.phase === 'cancelled' ? <X size={14} />
+                          : item.phase === 'skipped' ? <SkipForward size={14} />
+                            : <LoaderCircle size={14} className="spin-icon" />}
+                  </span>
                   <span className="download-progress-copy">
                     <strong>{progressIdentity(item)}</strong>
                     <small>
@@ -365,13 +467,21 @@ export default function Downloader() {
                       <span className="download-progress-state">{phaseLabel(item.phase)}</span>
                       {item.detail && ` · ${item.detail}`}
                     </small>
-                    {percent !== null && item.phase !== 'failed' && item.phase !== 'cancelled' && <>
+                    {percent !== null && item.phase !== 'failed' && item.phase !== 'cancelled' && item.phase !== 'skipped' && <>
                       <span className="download-progress-track">
                         <span style={{ width: `${percent}%` }} />
                       </span>
                       <span className="download-progress-percent">{percent}%</span>
                     </>}
                   </span>
+                  {(item.phase === 'failed' || item.phase === 'skipped') && !busy && <span className="download-progress-actions">
+                    <button className="download-row-action" onClick={() => void retryAt(item.index)} aria-label={`Retry link ${item.index + 1}`}>
+                      <RotateCcw size={13} /> Retry
+                    </button>
+                    {item.phase === 'failed' && <button className="download-row-action subtle" onClick={() => void skipAt(item.index)} aria-label={`Skip link ${item.index + 1}`}>
+                      <SkipForward size={13} /> Skip
+                    </button>}
+                  </span>}
                 </div>
               )
             })}
@@ -379,6 +489,7 @@ export default function Downloader() {
           {orderedProgress.length > 0 && <ul className="download-summary">
             <li>{completedCount} completed</li>
             {failedCount > 0 && <li className="is-failed">{failedCount} failed</li>}
+            {skippedCount > 0 && <li>{skippedCount} skipped</li>}
             {cancelledCount > 0 && <li>{cancelledCount} cancelled</li>}
             <li>{indexedRef.current ? 'Indexed into library' : 'Indexing when finished'}</li>
           </ul>}

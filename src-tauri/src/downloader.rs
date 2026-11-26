@@ -889,6 +889,33 @@ fn build_command(
     command
 }
 
+/// Keeps a resumed retry/skip batch attached to the original playlist
+/// numbering. A fresh batch passes no indices or total; a resumed batch passes
+/// only the links that still need work, with their original positions.
+fn download_plan(
+    urls_len: usize,
+    indices: Option<Vec<usize>>,
+    total: Option<usize>,
+) -> Result<(Vec<usize>, usize), String> {
+    let total = total.unwrap_or(urls_len);
+    if total < urls_len {
+        return Err("The download selection is larger than the original batch".to_string());
+    }
+    let indices = indices.unwrap_or_else(|| (0..urls_len).collect());
+    if indices.len() != urls_len {
+        return Err("The download selection does not match its links".to_string());
+    }
+    for (position, index) in indices.iter().enumerate() {
+        if *index >= total {
+            return Err("The download selection is outside the original batch".to_string());
+        }
+        if indices[..position].contains(index) {
+            return Err("The download selection contains a duplicate link".to_string());
+        }
+    }
+    Ok((indices, total))
+}
+
 fn run_downloads(
     app: AppHandle,
     directory: PathBuf,
@@ -896,14 +923,15 @@ fn run_downloads(
     tools: DownloaderTools,
     hd: bool,
     tv_compatible: bool,
+    indices: Vec<usize>,
+    total: usize,
     cancel: Arc<AtomicBool>,
     active: Arc<Mutex<Option<Arc<AtomicBool>>>>,
 ) {
     let _guard = DownloadGuard(active);
-    let total = urls.len();
     let failure: Arc<Mutex<Option<&'static str>>> = Arc::new(Mutex::new(None));
 
-    for (index, url) in urls.iter().enumerate() {
+    for (url, index) in urls.iter().zip(indices) {
         // The title arrives with the first real progress line. Keep it safe and
         // reuse it for the remaining phases instead of re-reading tool output.
         let item_title = Arc::new(Mutex::new(String::new()));
@@ -1083,6 +1111,8 @@ pub async fn start_download(
     urls: Vec<String>,
     hd: bool,
     tv_compatible: bool,
+    indices: Option<Vec<usize>>,
+    total: Option<usize>,
 ) -> Result<(), String> {
     let tools = current_tools(&app).await;
     if !tools.yt_dlp_ready {
@@ -1103,10 +1133,11 @@ pub async fn start_download(
     if urls.is_empty() {
         return Err("Paste at least one YouTube link".to_string());
     }
+    let (indices, total) = download_plan(urls.len(), indices, total)?;
     let cancel = state.try_start()?;
     let active = Arc::clone(&state.0);
     tauri::async_runtime::spawn_blocking(move || {
-        run_downloads(app, directory, urls, tools, hd, tv_compatible, cancel, active)
+        run_downloads(app, directory, urls, tools, hd, tv_compatible, indices, total, cancel, active)
     });
     Ok(())
 }
@@ -1451,6 +1482,22 @@ mod tests {
         assert!(args.windows(2).any(|pair| pair[0] == "--progress-template"
             && pair[1].as_str() == PROGRESS_TEMPLATE));
         assert!(progress_line("[download] Destination: F:\\Videos\\clip.mp4", 0, 1).is_none());
+    }
+
+    #[test]
+    fn download_plan_preserves_original_positions_for_retry_and_skip() {
+        assert_eq!(
+            download_plan(3, None, None).unwrap(),
+            (vec![0, 1, 2], 3)
+        );
+        assert_eq!(
+            download_plan(2, Some(vec![1, 3]), Some(4)).unwrap(),
+            (vec![1, 3], 4)
+        );
+        assert!(download_plan(2, Some(vec![0]), Some(4)).is_err());
+        assert!(download_plan(2, Some(vec![0, 4]), Some(4)).is_err());
+        assert!(download_plan(2, Some(vec![1, 1]), Some(4)).is_err());
+        assert!(download_plan(3, Some(vec![0, 1, 2]), Some(2)).is_err());
     }
 
     fn fake_tools(found: bool, ready: bool) -> DownloaderTools {

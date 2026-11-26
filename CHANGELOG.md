@@ -2,6 +2,13 @@
 
 All notable changes to RollaPlay are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- Failed Downloader rows now have **Retry** and **Skip** actions. Retry reruns that link and any unfinished links after it; Skip marks the link skipped and continues with the remaining links. A resumed batch keeps the original playlist numbering and never repeats completed, skipped or cancelled links.
+- Skipped links are shown with their own phase and summary count. Library indexing waits until every original link is settled and at least one file completed, so a failed link is never silently treated as done.
+
 ## [0.4.3] - 2026-11-26
 
 ### Fixed
