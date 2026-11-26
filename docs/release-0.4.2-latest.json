@@ -1,0 +1,19 @@
+{
+  "version": "0.4.2",
+  "notes": "## RollaPlay 0.4.2\n\nSigned Windows update. Published 2026-11-26.\n\n### Added\n\n- RollaPlay now checks for a signed stable release at startup. An available update appears as an in-app notice with a link to its release notes; downloading, installing and restarting still require explicit clicks.\n- Tool installation now shows a real step-by-step progress bar for both WinGet and GitHub installs, using fixed milestone labels with no paths, URLs or raw script output.\n\n### Changed\n\n- yt-dlp and FFmpeg are no longer downloaded or installed automatically. Opening the Downloader or starting a download only checks the tools; a missing or broken tool blocks the download with guidance to use the install buttons.\n\n### Fixed\n\n- Downloader progress now reads yt-dlp's real `[download] NN%` lines from stderr as well as stdout, so the bar advances during a transfer instead of staying at 0% (issue #4). Starting and terminal phases no longer show a misleading 0% bar.\n\nUpdates come from official GitHub Releases and are verified before installation. Nothing installs silently and your library, playlists and settings stay on this device.",
+  "pub_date": "2026-11-26T20:00:47.000Z",
+  "platforms": {
+    "windows-x86_64-nsis": {
+      "url": "https://github.com/redcodesick/RollaPlay/releases/download/v0.4.2/RollaPlay_0.4.2_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTZld6M0I0UmFPcGdVeGJ6RVV3WEtTQTVCSHA4V01ITUo2UkpRTTBpcWt4S2h2ZzdMSmo5V1dicHVyVVRTZ0swMW9qT0laakVPckRZZXNpZXg4eUx3aXZVSzJZeDUwM0FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzIzMjM5CWZpbGU6Um9sbGFQbGF5XzAuNC4yX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjQuMgpTY2lrQzZzdGprMTExaUNxYjZDT1FoR0hncDUvV01adUszdGpnQ1RIaENpZ1czTnJ6RmN6ZTJ2Q0VaSTdTZHVveWxBd202dWN2QkwyOGI5eWVqWEdEUT09Cg=="
+    },
+    "windows-x86_64-msi": {
+      "url": "https://github.com/redcodesick/RollaPlay/releases/download/v0.4.2/RollaPlay_0.4.2_x64_en-US.msi",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTZld6M0I0UmFPcHRzMUJUbDBOZnB5RXY5YjF4WkZXcy80UkxXRVY0cThWSHRRQjcxWlVOQWJwakw0MEo3UUZMbXAxS0tEWDNrMXhmRmFwcityRkxRV1RzMWprbmhTOWdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzIzMjM5CWZpbGU6Um9sbGFQbGF5XzAuNC4yX3g2NF9lbi1VUy5tc2kJdmVyc2lvbjowLjQuMgpBeTFwZTFrNTh2M1YxSmRsVkFOUFd1TTBweHhxSmZqN0ZQZGV3YVdMU1IyaXlaVXU2MGRJbU9ic2t5SXdRdnpKK1cxcDNaQVh2N3N2YVNicUpqNWZBZz09Cg=="
+    },
+    "windows-x86_64": {
+      "url": "https://github.com/redcodesick/RollaPlay/releases/download/v0.4.2/RollaPlay_0.4.2_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTZld6M0I0UmFPcGdVeGJ6RVV3WEtTQTVCSHA4V01ITUo2UkpRTTBpcWt4S2h2ZzdMSmo5V1dicHVyVVRTZ0swMW9qT0laakVPckRZZXNpZXg4eUx3aXZVSzJZeDUwM0FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzIzMjM5CWZpbGU6Um9sbGFQbGF5XzAuNC4yX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjQuMgpTY2lrQzZzdGprMTExaUNxYjZDT1FoR0hncDUvV01adUszdGpnQ1RIaENpZ1czTnJ6RmN6ZTJ2Q0VaSTdTZHVveWxBd202dWN2QkwyOGI5eWVqWEdEUT09Cg=="
+    }
+  }
+}
