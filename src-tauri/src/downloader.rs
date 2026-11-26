@@ -748,16 +748,23 @@ fn now_millis() -> u64 {
         .unwrap_or_default()
 }
 
+fn displayed_percent(phase: &str) -> Option<u8> {
+    match phase {
+        "complete" => Some(100),
+        // A real percentage is only shown once yt-dlp/FFmpeg reports one.
+        // Starting and terminal phases keep the bar hidden instead of
+        // displaying a misleading 0%.
+        "starting" | "downloading" | "merging" | "converting" => None,
+        _ => Some(0),
+    }
+}
+
 fn emit(app: &AppHandle, index: usize, total: usize, phase: &'static str, detail: &str) {
     let _ = app.emit(PROGRESS_EVENT, DownloadProgress {
         index,
         total,
         phase,
-        percent: match phase {
-            "complete" => Some(100),
-            "downloading" | "merging" | "converting" => None,
-            _ => Some(0),
-        },
+        percent: displayed_percent(phase),
         detail: detail.to_string(),
     });
 }
@@ -883,6 +890,7 @@ fn run_downloads(
         let stderr_thread = child.stderr.take().map(|stderr| {
             let failure_hint_ref = Arc::clone(&failure);
             let log_app = app.clone();
+            let progress_app = app.clone();
             let activity = Arc::clone(&last_activity);
             std::thread::spawn(move || {
                 let mut logged_unmapped = false;
@@ -897,6 +905,11 @@ fn run_downloads(
                     } else if !logged_unmapped && line.to_ascii_lowercase().contains("error") {
                         logged_unmapped = true;
                         log_unmapped_error(&log_app, &line);
+                    }
+                    // yt-dlp writes `[download] NN%` progress to stderr, so the
+                    // status card only advances when this stream is parsed too.
+                    if let Some(update) = progress_line(&line, index, total) {
+                        let _ = progress_app.emit(PROGRESS_EVENT, update);
                     }
                 }
             })
@@ -1163,6 +1176,27 @@ mod tests {
         assert!(progress_line("[download] Destination: F:\\Videos\\clip.mp4", 0, 2).is_none());
         let merging = progress_line("[Merger] Merging formats into \"clip.mp4\"", 0, 2).unwrap();
         assert_eq!(merging.phase, "merging");
+    }
+
+    #[test]
+    fn only_real_progress_shows_a_percentage() {
+        assert_eq!(displayed_percent("starting"), None);
+        assert_eq!(displayed_percent("downloading"), None);
+        assert_eq!(displayed_percent("converting"), None);
+        assert_eq!(displayed_percent("complete"), Some(100));
+        assert_eq!(displayed_percent("failed"), Some(0));
+    }
+
+    #[test]
+    fn reads_yt_dlp_progress_written_to_stderr() {
+        // yt-dlp emits download percentages on stderr, not stdout. The reader
+        // on both streams must recognize the same real progress line.
+        let update = progress_line("[download]  23.4% of 8.10MiB at 1.02MiB/s ETA 00:06", 0, 1).unwrap();
+        assert_eq!(update.phase, "downloading");
+        assert_eq!(update.percent, Some(23));
+        assert!(update.detail.contains("23%"));
+        assert!(!update.detail.contains(":\\"));
+        assert!(!update.detail.contains("http"));
     }
 
     #[test]

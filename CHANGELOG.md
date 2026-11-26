@@ -2,6 +2,12 @@
 
 All notable changes to RollaPlay are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- Downloader progress now reads yt-dlp's real `[download] NN%` lines from **stderr** as well as stdout, so the status bar advances during a transfer instead of staying at 0% ([#4](https://github.com/redcodesick/RollaPlay/issues/4)). Starting and terminal phases no longer display a misleading 0% bar.
+
 ## [0.4.1] - 2026-11-26
 
 ### Fixed
