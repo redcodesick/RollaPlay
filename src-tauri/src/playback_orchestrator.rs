@@ -171,6 +171,15 @@ impl PlaybackOrchestrator {
         if !probe_ok {
             return Err(format!("The receiver would not be able to reach this video: {probe_message}"));
         }
+        if scoped.av1_webm {
+            let _ = self.app.emit(
+                "phase5-notification",
+                serde_json::json!({
+                    "level": "warning",
+                    "message": "This WebM uses AV1. Some receivers play it but report Idle; H.264/AAC MP4 or VP9 WebM is more reliable.",
+                }),
+            );
+        }
         if self.dlna.is_active() {
             let device = self
                 .dlna

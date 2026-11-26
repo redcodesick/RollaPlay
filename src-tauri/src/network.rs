@@ -1,6 +1,8 @@
 use netdev::get_interfaces;
 use serde::Serialize;
 use std::net::Ipv4Addr;
+#[cfg(windows)]
+use std::{os::windows::process::CommandExt, process::Command};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NetworkInterfaceInfo {
@@ -16,6 +18,8 @@ pub struct NetworkInterfaceInfo {
     pub is_tun: bool,
     pub is_physical: bool,
     pub is_default_route: bool,
+    pub transmit_speed_bits: Option<u64>,
+    pub receive_speed_bits: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -31,6 +35,179 @@ pub struct LanAddress {
 pub struct NetworkDiagnostics {
     pub selected: Option<LanAddress>,
     pub interfaces: Vec<NetworkInterfaceInfo>,
+}
+
+/// Allow-listed link-quality tiers. Numeric channel is included because it is
+/// router configuration, not device identity; everything else is a fixed tier.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct LinkQuality {
+    pub adapter_kind: String,
+    pub band: String,
+    pub channel: Option<u16>,
+    pub channel_width: String,
+    pub signal: String,
+    pub link_speed: String,
+}
+
+impl Default for LinkQuality {
+    fn default() -> Self {
+        Self {
+            adapter_kind: "unknown".to_string(),
+            band: "unknown".to_string(),
+            channel: None,
+            channel_width: "unavailable".to_string(),
+            signal: "unknown".to_string(),
+            link_speed: "unknown".to_string(),
+        }
+    }
+}
+
+fn speed_tier(bits_per_second: Option<u64>) -> String {
+    let mbps = match bits_per_second {
+        Some(value) if value > 0 => value / 1_000_000,
+        _ => return "unknown".to_string(),
+    };
+    match mbps {
+        300.. => "high".to_string(),
+        100..=299 => "moderate".to_string(),
+        40..=99 => "low".to_string(),
+        1..=39 => "very_low".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+fn signal_tier(percent: u8) -> String {
+    match percent {
+        70..=100 => "excellent".to_string(),
+        50..=69 => "good".to_string(),
+        30..=49 => "fair".to_string(),
+        0..=29 => "weak".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+fn band_from_channel(channel: u16) -> String {
+    match channel {
+        1..=14 => "2_4_ghz".to_string(),
+        15..=233 => "5_or_6_ghz".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+/// Reads only channel, signal, and rate from the selected WLAN section. SSID,
+/// BSSID, MAC address, profile name, and every raw line are discarded here.
+fn parse_wlan_fields(output: &str, interface_name: &str) -> (Option<u16>, Option<u8>, Option<u64>) {
+    let mut matched = false;
+    let mut channel = None;
+    let mut signal = None;
+    let mut rate_mbps: Option<f64> = None;
+    for line in output.lines() {
+        let line = line.trim();
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        let value = value.trim();
+        if key == "name" {
+            matched = value.eq_ignore_ascii_case(interface_name);
+            if matched {
+                channel = None;
+                signal = None;
+                rate_mbps = None;
+            }
+            continue;
+        }
+        if !matched {
+            continue;
+        }
+        match key.as_str() {
+            "channel" => channel = value.parse::<u16>().ok(),
+            "signal" => signal = value.trim_end_matches('%').trim().parse::<u8>().ok(),
+            "receive rate (mbps)" | "transmit rate (mbps)" => {
+                let parsed = value.parse::<f64>().ok().unwrap_or(0.0);
+                if parsed > 0.0 {
+                    rate_mbps = Some(rate_mbps.unwrap_or(0.0).max(parsed));
+                }
+            }
+            _ => {}
+        }
+    }
+    let rate_bits = rate_mbps.map(|rate| (rate * 1_000_000.0) as u64);
+    (channel, signal, rate_bits)
+}
+
+#[cfg(windows)]
+fn wlan_fields(interface_name: &str) -> (Option<u16>, Option<u8>, Option<u64>) {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let Ok(output) = Command::new("netsh")
+        .args(["wlan", "show", "interfaces"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    else {
+        return (None, None, None);
+    };
+    if !output.status.success() {
+        return (None, None, None);
+    }
+    parse_wlan_fields(&String::from_utf8_lossy(&output.stdout), interface_name)
+}
+
+#[cfg(not(windows))]
+fn wlan_fields(_interface_name: &str) -> (Option<u16>, Option<u8>, Option<u64>) {
+    (None, None, None)
+}
+
+pub fn link_quality_for(interfaces: &[NetworkInterfaceInfo], selected_name: &str) -> LinkQuality {
+    let Some(interface) = interfaces.iter().find(|item| item.name == selected_name) else {
+        return LinkQuality::default();
+    };
+    let interface_type = interface.interface_type.to_ascii_lowercase();
+    let adapter_kind = if interface_type.contains("wifi") || interface_type.contains("wireless") {
+        "wireless"
+    } else if interface_type.contains("ethernet") {
+        "wired"
+    } else {
+        "unknown"
+    };
+    let reported_speed = interface
+        .transmit_speed_bits
+        .max(interface.receive_speed_bits);
+    if adapter_kind == "wireless" {
+        let (channel, signal, wlan_speed) = wlan_fields(selected_name);
+        LinkQuality {
+            adapter_kind: adapter_kind.to_string(),
+            band: channel
+                .map(band_from_channel)
+                .unwrap_or_else(|| "unknown".to_string()),
+            channel,
+            channel_width: "unavailable".to_string(),
+            signal: signal
+                .map(signal_tier)
+                .unwrap_or_else(|| "unknown".to_string()),
+            link_speed: speed_tier(reported_speed.or(wlan_speed)),
+        }
+    } else {
+        LinkQuality {
+            adapter_kind: adapter_kind.to_string(),
+            band: if adapter_kind == "wired" {
+                "wired".to_string()
+            } else {
+                "unknown".to_string()
+            },
+            channel: None,
+            channel_width: if adapter_kind == "wired" {
+                "not_applicable".to_string()
+            } else {
+                "unavailable".to_string()
+            },
+            signal: if adapter_kind == "wired" {
+                "wired".to_string()
+            } else {
+                "unknown".to_string()
+            },
+            link_speed: speed_tier(reported_speed),
+        }
+    }
 }
 
 pub fn detect_network() -> NetworkDiagnostics {
@@ -49,6 +226,8 @@ pub fn detect_network() -> NetworkDiagnostics {
             is_tun: interface.is_tun(),
             is_physical: interface.is_physical(),
             is_default_route: interface.default,
+            transmit_speed_bits: interface.transmit_speed,
+            receive_speed_bits: interface.receive_speed,
         })
         .collect::<Vec<_>>();
     let selected = select_lan_address(&interfaces);
@@ -112,6 +291,8 @@ mod tests {
             is_tun: false,
             is_physical: physical,
             is_default_route: default,
+            transmit_speed_bits: Some(300_000_000),
+            receive_speed_bits: Some(300_000_000),
         }
     }
 
@@ -150,5 +331,47 @@ mod tests {
         let mut tunnel = interface("tunnel", "192.168.1.6", true, true);
         tunnel.is_tun = true;
         assert!(select_lan_address(&[down, loopback, tunnel]).is_none());
+    }
+
+    #[test]
+    fn link_quality_reports_tiers_without_network_identity() {
+        let sample = "Name                  : Wi-Fi\nSSID                  : PrivateNetworkName\nBSSID                 : aa:bb:cc:dd:ee:ff\nChannel               : 6\nSignal                : 42%\nReceive rate (Mbps)   : 65.0\nTransmit rate (Mbps)  : 65.0\n";
+        let (channel, signal, speed) = super::parse_wlan_fields(sample, "Wi-Fi");
+        assert_eq!(channel, Some(6));
+        assert_eq!(signal, Some(42));
+        assert_eq!(speed, Some(65_000_000));
+        let serialized = serde_json::to_string(&super::LinkQuality {
+            adapter_kind: "wireless".to_string(),
+            band: super::band_from_channel(channel.unwrap()),
+            channel,
+            channel_width: "unavailable".to_string(),
+            signal: super::signal_tier(signal.unwrap()),
+            link_speed: super::speed_tier(speed),
+        })
+        .unwrap();
+        assert!(!serialized.contains("PrivateNetworkName"));
+        assert!(!serialized.contains("aa:bb:cc:dd:ee:ff"));
+        assert!(serialized.contains("2_4_ghz"));
+        assert!(serialized.contains("fair"));
+        assert!(serialized.contains("low"));
+    }
+
+    #[test]
+    fn link_quality_ignores_other_wlan_sections() {
+        let sample = "Name                  : OtherAdapter\nChannel               : 149\nSignal                : 95%\nName                  : Wi-Fi\nChannel               : 11\nSignal                : 81%\n";
+        let (channel, signal, _) = super::parse_wlan_fields(sample, "Wi-Fi");
+        assert_eq!(channel, Some(11));
+        assert_eq!(signal, Some(81));
+    }
+
+    #[test]
+    fn wired_adapters_report_wired_tiers_only() {
+        let interfaces = vec![interface("Ethernet", "192.168.1.20", true, true)];
+        let quality = super::link_quality_for(&interfaces, "Ethernet");
+        assert_eq!(quality.adapter_kind, "wired");
+        assert_eq!(quality.signal, "wired");
+        assert_eq!(quality.link_speed, "high");
+        assert_eq!(quality.channel_width, "not_applicable");
+        assert!(quality.channel.is_none());
     }
 }

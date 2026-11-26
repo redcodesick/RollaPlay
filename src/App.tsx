@@ -6,6 +6,7 @@ import { getName, getTauriVersion, getVersion } from '@tauri-apps/api/app'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import MediaLibrary from './components/MediaLibrary'
 import MediaServerSettings from './components/MediaServerSettings'
+import NetworkDiagnosticsPanel from './components/NetworkDiagnosticsPanel'
 import Downloader from './components/Downloader'
 import CastPanel from './components/CastPanel'
 import ConnectPanel from './components/ConnectPanel'
@@ -22,7 +23,7 @@ import {
   onCastPlaybackEvent, showCastSender, type DlnaStatus, type SenderHostRect,
 } from './cast'
 import {
-  clearWatchHistory, formatDuration, getPlaybackState, isPlaylistAvailable, listPlaylists,
+  clearWatchHistory, formatDuration, getPlaybackState, hasPlayableQueueEntry, isPlaylistAvailable, listPlaylists,
   playMediaNow, playNext, playPlaylist, playPrevious, selectPlaylist, type Phase5Notification,
   type PlaybackSnapshot, type PlaylistSummary,
 } from './playlist'
@@ -551,12 +552,13 @@ function SettingsView({
         <article className="settings-card" id="settings-diagnostics">
           <div className="settings-card-icon"><ShieldCheck size={19} /></div>
           <div><h3>Diagnostics</h3><p>Redacted local checks and streaming diagnostics.</p></div>
-          <button className="settings-action" onClick={() => scrollTo('settings-cast')}>Review <span>→</span></button>
+          <button className="settings-action" onClick={() => scrollTo('settings-network-diagnostics')}>Review <span>→</span></button>
         </article>
       </div>
       <div className="privacy-banner"><ShieldCheck size={19} /><div><strong>Your privacy matters</strong><p>Media metadata and playlists are stored locally on this PC. No cloud account required.</p></div></div>
       <div id="settings-network-panel"><MediaServerSettings /></div>
       <div id="settings-cast"><CastPanel /></div>
+      <NetworkDiagnosticsPanel />
     </section>
   )
 }
@@ -611,8 +613,14 @@ function App() {
     void playMediaNow(id).then(() => mutatePhase5()).catch((error) => showNotice(String(error), 'error'))
   }, [mutatePhase5, showNotice])
   const playSelectedPlaylist = useCallback((id: number) => {
-    void playPlaylist(id).then(() => mutatePhase5()).catch((error) => showNotice(String(error), 'error'))
-  }, [mutatePhase5, showNotice])
+    const name = playlists?.find((playlist) => playlist.id === id)?.name
+    void playPlaylist(id)
+      .then(() => {
+        showNotice(name ? `Playing “${name}” on the Cast device.` : 'Playing playlist on the Cast device.', 'success')
+        return mutatePhase5()
+      })
+      .catch((error) => showNotice(String(error), 'error'))
+  }, [mutatePhase5, playlists, showNotice])
   const openSelectedPlaylist = useCallback((id: number) => {
     void selectPlaylist(id)
       .then(() => mutatePhase5())
@@ -979,6 +987,11 @@ function App() {
         progressPercent={progressPercent}
         previousTitle={phase5Snapshot ? `Previous · restarts after ${phase5Snapshot.previous_restart_threshold_seconds}s; with Shuffle follows history` : 'Previous'}
         queueAvailable={!!phase5Snapshot?.current_entry_id}
+        nextAvailable={!!phase5Snapshot && hasPlayableQueueEntry(phase5Snapshot) && (
+          !!phase5Snapshot.next_entry_id
+          || phase5Snapshot.repeat === 'all'
+          || !phase5Snapshot.current_entry_id
+        )}
         muted={mutePreview ?? !!castPlayback?.muted}
         volume={volumePreview ?? castPlayback?.volume_level ?? 1}
         onPrevious={queuePrevious}

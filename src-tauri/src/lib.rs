@@ -15,6 +15,7 @@ use walkdir::WalkDir;
 
 mod cast_discovery;
 mod cast_sender;
+mod diagnostics;
 mod dlna;
 mod downloader;
 mod lg_tv;
@@ -29,6 +30,7 @@ mod thumbnail;
 
 use cast_discovery::CastDevice;
 use cast_sender::{CastDiagnosticsSnapshot, CastEventReport, CastPlaybackSnapshot, CastSenderManager, CastSenderStatus};
+use diagnostics::{build_diagnostics, probe_receiver_control, CompatibilityInputs, NetworkCompatibilityDiagnostics};
 use dlna::{DlnaManager, DlnaStatus};
 use downloader::{cancel_download, downloader_tools, install_tools_winget, prepare_tools, start_download};
 use lg_tv::{LgTvDevice, LgTvInput, LgTvManager, LgTvPairResult, LgTvStatus};
@@ -88,6 +90,8 @@ struct CastLoadOutcome {
     filename: String,
     mime_type: String,
     expires_in_seconds: u64,
+    /// Fixed compatibility hint; the UI shows one of its own fixed warnings.
+    av1_webm: bool,
 }
 
 #[derive(Clone)]
@@ -1738,6 +1742,163 @@ fn clear_media_stream_diagnostics(server: State<'_, MediaServerManager>) {
     server.clear_stream_diagnostics();
 }
 
+/// Runs an on-demand, redacted compatibility check. Discovery is deliberately
+/// performed here so the report describes the network at the moment of the
+/// failure. No address, URL, credential, file path, or raw device response is
+/// returned to the frontend.
+#[tauri::command]
+async fn get_network_compatibility_diagnostics(
+    database: State<'_, AppDatabase>,
+    server: State<'_, MediaServerManager>,
+    cast: State<'_, CastSenderManager>,
+    dlna: State<'_, DlnaManager>,
+    orchestrator: State<'_, PlaybackOrchestrator>,
+) -> Result<NetworkCompatibilityDiagnostics, String> {
+    let network = tokio::task::spawn_blocking(network::detect_network)
+        .await
+        .map_err(|_| "Could not inspect network interfaces".to_string())?;
+    let lan = network.selected.as_ref();
+    let lan_ipv4 = lan.and_then(|address| address.ipv4.parse::<std::net::Ipv4Addr>().ok());
+    let prefix_length = lan.map(|address| address.prefix_length).unwrap_or(0);
+    let selected_interface_name = lan.map(|address| address.interface_name.clone()).unwrap_or_default();
+
+    // netsh output is read synchronously off the async runtime and reduced to
+    // fixed tiers before it crosses the bridge. No SSID/BSSID is retained.
+    let interfaces = network.interfaces.clone();
+    let link_quality = tokio::task::spawn_blocking(move || {
+        network::link_quality_for(&interfaces, &selected_interface_name)
+    })
+    .await
+    .unwrap_or_default();
+
+    let server_status = server.status_snapshot().await;
+    let local_probe_ok = server.test_connection().await.reachable;
+    let devices = discover_cast_devices().await.unwrap_or_default();
+
+    let subnet_state = |address: &str| -> Option<bool> {
+        let receiver = address.parse::<std::net::Ipv4Addr>().ok()?;
+        let lan = lan_ipv4?;
+        Some(media_server::same_ipv4_subnet(receiver, lan, prefix_length))
+    };
+    let same_subnet_receivers = devices.iter().filter(|device| subnet_state(&device.address) == Some(true)).count();
+    let different_subnet_receivers = devices.iter().filter(|device| subnet_state(&device.address) == Some(false)).count();
+
+    let cast_snapshot = cast.snapshot();
+    let transport = if dlna.is_active() {
+        "dlna"
+    } else if cast_snapshot.device_name.is_some() {
+        "cast"
+    } else {
+        "unknown"
+    }.to_string();
+    let selected_receiver = dlna.selected()
+        .or_else(|| devices.iter().find(|device| {
+            cast_snapshot.device_name.as_deref()
+                .map(|name| name.eq_ignore_ascii_case(&device.name))
+                .unwrap_or(false)
+        }).cloned())
+        .or_else(|| devices.first().cloned());
+    let receiver_control = match selected_receiver.as_ref() {
+        Some(device) => probe_receiver_control(&device.address, device.port).await,
+        None => None,
+    };
+
+    let active_session_name = if transport == "dlna" && dlna.has_active_playback() {
+        dlna.selected().map(|device| device.name)
+    } else if transport == "cast" {
+        cast_snapshot.device_name.clone()
+    } else {
+        None
+    };
+    let selected_receiver_matches_session = active_session_name.as_deref().and_then(|active_name| {
+        selected_receiver
+            .as_ref()
+            .map(|device| device.name.eq_ignore_ascii_case(active_name))
+    });
+
+    let streams = server.stream_diagnostics();
+    let (receiver_media_requests, receiver_media_bytes, receiver_media_seconds, receiver_stalled_requests) = selected_receiver.as_ref().map(|device| {
+        let recent = streams.recent_requests.iter()
+            .filter(|request| request.client_ip == device.address);
+        let active = streams.active_streams.iter()
+            .filter(|stream| stream.client_ip == device.address);
+        let mut requests = 0usize;
+        let mut bytes = 0u64;
+        let mut seconds = 0u64;
+        let mut stalled = 0usize;
+        for request in recent {
+            requests += 1;
+            bytes = bytes.saturating_add(request.bytes_transferred);
+            seconds = seconds.saturating_add(request.duration_seconds);
+            if request.request_status == "interrupted" {
+                stalled += 1;
+            }
+        }
+        for stream in active {
+            requests += 1;
+            bytes = bytes.saturating_add(stream.bytes_transferred);
+            seconds = seconds.saturating_add(stream.duration_seconds);
+        }
+        (requests, bytes, seconds, stalled)
+    }).unwrap_or((0, 0, 0, 0));
+
+    let media_url_probe = cast
+        .diagnostics(server.cast_grants().active_count())
+        .media_url_probe
+        .map(|probe| probe.reachable);
+    let playback = orchestrator.snapshot();
+    let av1_webm = match playback.current_media_file_id {
+        Some(media_file_id) => server.probe_av1_webm(media_file_id).await,
+        None => false,
+    };
+    let media_format = playback.current_media_file_id.and_then(|media_file_id| {
+        let connection = database.0.lock().ok()?;
+        let extension: Option<String> = connection
+            .query_row("SELECT extension FROM media_files WHERE id=?1", [media_file_id], |row| row.get(0))
+            .optional()
+            .ok()
+            .flatten()?;
+        let extension = extension?;
+        let normalized = extension.trim_start_matches('.').to_ascii_lowercase();
+        let (mime, _) = media_server::detect_mime(&normalized, &[]);
+        Some((
+            normalized.to_ascii_uppercase(),
+            mime.to_string(),
+            mime.starts_with("video/") && media_server::is_cast_supported_extension(&normalized),
+        ))
+    });
+
+    let input = CompatibilityInputs {
+        transport,
+        lan_selected: lan.is_some(),
+        server_running: server_status.state == "running",
+        local_probe_ok,
+        receiver_count: devices.len(),
+        same_subnet_receivers,
+        different_subnet_receivers,
+        receiver_control,
+        media_url_probe,
+        receiver_media_requests,
+        receiver_media_bytes,
+        receiver_media_seconds,
+        receiver_stalled_requests,
+        selected_receiver_matches_session,
+        link_quality,
+        playback_error: playback.last_error.is_some(),
+        playback_state: playback.state.as_str().to_string(),
+        current_entry: playback.current_entry_id.is_some() || playback.current_media_file_id.is_some(),
+        next_entry: playback.next_entry_id.is_some(),
+        repeat_all: playback.repeat == playlist::RepeatMode::All,
+        media_format,
+        av1_webm,
+    };
+    let checked_at_epoch_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    Ok(build_diagnostics(&input, checked_at_epoch_ms))
+}
+
 /// Real, on-demand mDNS discovery for the in-app Connect panel. This does not
 /// talk to the sender page and never returns credentials or streaming URLs.
 #[tauri::command]
@@ -2036,6 +2197,7 @@ async fn cast_load_media(
         filename: scoped.filename,
         mime_type: scoped.mime_type,
         expires_in_seconds: scoped.expires_in_seconds,
+        av1_webm: scoped.av1_webm,
     })
 }
 
@@ -2281,6 +2443,16 @@ async fn phase5_play_playlist(
     effects.extend(orchestrator.engine().set_mode(PlaybackMode::Auto)?);
     orchestrator.engine().select_playlist(playlist_id)?;
     effects.extend(orchestrator.engine().queue_add_playlist(playlist_id, AddMode::PlayNow)?);
+    // The frontend reports that the playlist is playing. Drop only the two
+    // internal notices from setup; keep warnings about unavailable files.
+    effects.retain(|effect| match effect {
+        EngineEffect::Notify { message, .. } => {
+            message != "Queue cleared."
+                && message != "Playback mode: Automatic."
+                && message != "Playback mode: Manual."
+        }
+        _ => true,
+    });
     Ok(phase5_finish(&orchestrator, effects).await)
 }
 
@@ -2729,6 +2901,7 @@ pub fn run() {
             restart_media_server,
             set_media_server_port,
             get_media_network_diagnostics,
+            get_network_compatibility_diagnostics,
             test_media_server_connection,
             get_media_stream_diagnostics,
             clear_media_stream_diagnostics,

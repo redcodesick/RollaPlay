@@ -93,6 +93,13 @@ export function isPlaylistAvailable(): boolean {
   return isTauri()
 }
 
+/** Mirrors the engine's playable-entry filter for Next-button gating. */
+export function hasPlayableQueueEntry(snapshot: PlaybackSnapshot | null): boolean {
+  return !!snapshot && snapshot.queue.some(
+    (entry) => entry.availability_state === 'available' && entry.status !== 'unavailable',
+  )
+}
+
 const call = <T>(command: string, args?: Record<string, unknown>): Promise<T> =>
   invokeTracked<T>(command, args, 'playlists')
 

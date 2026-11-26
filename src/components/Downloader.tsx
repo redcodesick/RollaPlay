@@ -15,6 +15,7 @@ const storedUi = {
   folder: '',
   linksText: '',
   hd: true,
+  tvCompatible: false,
   installYtDlp: true,
   installFfmpeg: true,
   tools: null as DownloaderTools | null,
@@ -34,6 +35,7 @@ export default function Downloader() {
   const [folder, setFolder] = useState(storedUi.folder)
   const [linksText, setLinksText] = useState(storedUi.linksText)
   const [hd, setHd] = useState(storedUi.hd)
+  const [tvCompatible, setTvCompatible] = useState(storedUi.tvCompatible)
   const [installYtDlp, setInstallYtDlp] = useState(storedUi.installYtDlp)
   const [installFfmpeg, setInstallFfmpeg] = useState(storedUi.installFfmpeg)
   const [tools, setTools] = useState<DownloaderTools | null>(storedUi.tools)
@@ -52,6 +54,7 @@ export default function Downloader() {
     storedUi.folder = folder
     storedUi.linksText = linksText
     storedUi.hd = hd
+    storedUi.tvCompatible = tvCompatible
     storedUi.installYtDlp = installYtDlp
     storedUi.installFfmpeg = installFfmpeg
     storedUi.tools = tools
@@ -63,7 +66,7 @@ export default function Downloader() {
     storedUi.notice = notice
     storedUi.completed = completedRef.current
     storedUi.indexed = indexedRef.current
-  }, [folder, linksText, hd, installYtDlp, installFfmpeg, tools, busy, preparing, installDetail, progress, error, notice])
+  }, [folder, linksText, hd, tvCompatible, installYtDlp, installFfmpeg, tools, busy, preparing, installDetail, progress, error, notice])
 
   const addToLibrary = useCallback(async () => {
     if (indexedRef.current || !folder) return
@@ -91,9 +94,9 @@ export default function Downloader() {
 
   // One shared check so the mount effect and the Download button can never
   // start two installers at the same time. WinGet first, GitHub as fallback.
-  const provisionTools = useCallback((current: DownloaderTools | null, wantHd: boolean) => {
+  const provisionTools = useCallback((current: DownloaderTools | null, wantFfmpeg: boolean) => {
     const needYtDlp = !current?.yt_dlp_ready
-    const needFfmpeg = wantHd && !current?.ffmpeg_ready
+    const needFfmpeg = wantFfmpeg && !current?.ffmpeg_ready
     if (!needYtDlp && !needFfmpeg && current) return Promise.resolve(current)
     if (provisionRef.current) return provisionRef.current
 
@@ -106,10 +109,10 @@ export default function Downloader() {
       } catch (wingetError) {
         diagnosticError('downloader', 'winget_auto_install_failed', wingetError, { needYtDlp, needFfmpeg })
         setInstallDetail('WinGet was unavailable; fetching official releases instead.')
-        result = await prepareTools(wantHd)
+        result = await prepareTools(wantFfmpeg)
       }
       setTools(result)
-      setInstallDetail(result.yt_dlp_ready && (!wantHd || result.ffmpeg_ready)
+      setInstallDetail(result.yt_dlp_ready && (!wantFfmpeg || result.ffmpeg_ready)
         ? 'yt-dlp and FFmpeg responded to their version checks.'
         : 'yt-dlp responded to its version check.')
       return result
@@ -183,17 +186,18 @@ export default function Downloader() {
     setPreparing(true)
     setError('')
     setInstallDetail('')
+    const wantFfmpeg = hd || tvCompatible
     try {
-      const result = await prepareTools(hd)
+      const result = await prepareTools(wantFfmpeg)
       setTools(result)
-      setNotice(result.yt_dlp_ready && (!hd || result.ffmpeg_ready) ? 'yt-dlp and FFmpeg responded to their version checks.' : 'yt-dlp is ready for standard downloads.')
+      setNotice(result.yt_dlp_ready && (!wantFfmpeg || result.ffmpeg_ready) ? 'yt-dlp and FFmpeg responded to their version checks.' : 'yt-dlp is ready for standard downloads.')
     } catch (prepareError) {
-      diagnosticError('downloader', 'tools_prepare_failed', prepareError, { hd })
+      diagnosticError('downloader', 'tools_prepare_failed', prepareError, { hd, tvCompatible })
       setError(friendlyError(prepareError))
     } finally {
       setPreparing(false)
     }
-  }, [hd])
+  }, [hd, tvCompatible])
 
   const installWithWinget = useCallback(async () => {
     setPreparing(true)
@@ -225,20 +229,23 @@ export default function Downloader() {
     try {
       // Always re-probe: cached flags can outlive a tool that stopped working.
       const current = await getDownloaderTools()
-      const ready = await provisionTools(current, hd)
-      if (!ready.yt_dlp_ready || (hd && !ready.ffmpeg_ready)) {
+      const wantFfmpeg = hd || tvCompatible
+      const ready = await provisionTools(current, wantFfmpeg)
+      if (!ready.yt_dlp_ready || (wantFfmpeg && !ready.ffmpeg_ready)) {
         throw new Error('Downloader tools are still not ready. Install them with WinGet and try again.')
       }
       setBusy(true)
-      setNotice('Downloading… your library will update when the videos are ready.')
-      await startDownload(folder, urls, hd)
+      setNotice(tvCompatible
+        ? 'Downloading… TV-compatible files will replace the originals when verified.'
+        : 'Downloading… your library will update when the videos are ready.')
+      await startDownload(folder, urls, hd, tvCompatible)
     } catch (downloadError) {
-      diagnosticError('downloader', 'download_start_failed', downloadError, { hd, linkCount: urls.length })
+      diagnosticError('downloader', 'download_start_failed', downloadError, { hd, tvCompatible, linkCount: urls.length })
       setBusy(false)
       setNotice('')
       setError(friendlyError(downloadError))
     }
-  }, [folder, hd, linksText, provisionTools])
+  }, [folder, hd, tvCompatible, linksText, provisionTools])
 
   const cancel = useCallback(async () => {
     try {
@@ -253,7 +260,7 @@ export default function Downloader() {
     return <section className="section-page downloader-page"><h1>YouTube downloader</h1><p>This feature works in the installed Windows app.</p></section>
   }
 
-  const needsTools = !tools?.yt_dlp_ready || (hd && !tools?.ffmpeg_ready)
+  const needsTools = !tools?.yt_dlp_ready || ((hd || tvCompatible) && !tools?.ffmpeg_ready)
   const toolLabel = (found?: boolean, ready?: boolean) => ready ? 'ready' : found ? 'not responding' : 'not installed'
   const toolClass = (ready?: boolean, found?: boolean) => ready ? 'ok' : found ? 'warn' : ''
   const orderedProgress = Object.values(progress).sort((a, b) => a.index - b.index)
@@ -289,6 +296,7 @@ export default function Downloader() {
           <div className="download-quality-note">
             <div><strong>Standard</strong><span>Single-file MP4 · fastest, widest receiver support</span></div>
             <div><strong>HD</strong><span>H.264 video + AAC audio merged into MP4 · needs FFmpeg</span></div>
+            <div><strong>TV-friendly</strong><span>Verifies real codecs and converts unsupported files to H.264/AAC MP4</span></div>
           </div>
 
           <label className="download-check">
@@ -304,6 +312,19 @@ export default function Downloader() {
             <span><strong>HD quality · H.264/AAC MP4</strong><small>Uses FFmpeg to combine 720p/1080p AVC with AAC. Install it below or fetch it from GitHub.</small></span>
           </label>
 
+          <label className="download-check">
+            <input
+              type="checkbox"
+              checked={tvCompatible}
+              onChange={(event) => {
+                setTvCompatible(event.target.checked)
+                if (event.target.checked) setInstallFfmpeg(true)
+              }}
+              disabled={busy}
+            />
+            <span><strong>Convert to TV-friendly MP4</strong><small>For Cast and DLNA receivers. Checks the actual video and audio streams; re-encodes with FFmpeg only when needed. The original is replaced after the converted file is verified. Needs FFmpeg.</small></span>
+          </label>
+
           <div className="download-winget">
             <div className="download-label">Install tools with WinGet</div>
             <label className="download-check compact">
@@ -312,7 +333,7 @@ export default function Downloader() {
             </label>
             <label className="download-check compact">
               <input type="checkbox" checked={installFfmpeg} onChange={(event) => setInstallFfmpeg(event.target.checked)} disabled={busy || preparing} />
-              <span><strong>FFmpeg</strong><small>HD video/audio merge</small></span>
+              <span><strong>FFmpeg</strong><small>HD merge and TV-friendly conversion</small></span>
             </label>
             <button
               className="folder-action"

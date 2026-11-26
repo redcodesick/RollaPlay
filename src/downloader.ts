@@ -10,7 +10,7 @@ export type DownloaderTools = {
   hint: string
 }
 
-export type DownloadPhase = 'starting' | 'downloading' | 'merging' | 'complete' | 'cancelled' | 'failed'
+export type DownloadPhase = 'starting' | 'downloading' | 'merging' | 'converting' | 'complete' | 'cancelled' | 'failed'
 
 export type DownloadProgress = {
   index: number
@@ -34,8 +34,8 @@ export const prepareTools = (includeFfmpeg: boolean) =>
 export const installToolsWinget = (installYtDlp: boolean, installFfmpeg: boolean) =>
   invokeTracked<DownloaderTools>('install_tools_winget', { installYtDlp, installFfmpeg }, 'downloader')
 
-export const startDownload = (directory: string, urls: string[], hd: boolean) =>
-  invokeTracked<void>('start_download', { directory, urls, hd }, 'downloader')
+export const startDownload = (directory: string, urls: string[], hd: boolean, tvCompatible: boolean) =>
+  invokeTracked<void>('start_download', { directory, urls, hd, tvCompatible }, 'downloader')
 
 export const cancelDownload = () =>
   invokeTracked<boolean>('cancel_download', undefined, 'downloader')

@@ -94,6 +94,7 @@ export type CastLoadOutcome = {
   filename: string
   mime_type: string
   expires_in_seconds: number
+  av1_webm: boolean
 }
 
 export type CastEventReport = {

@@ -970,12 +970,15 @@ impl PlaybackEngine {
                 position: 0,
             });
         }
+        // Both explicit play actions must keep the rest of the queue reachable.
+        // Appending a PlayNow item at the end made it the last entry, so the
+        // Next button immediately reported the end of the queue.
         let insert_at = match mode {
-            AddMode::PlayNext => data.current_entry_id.as_ref()
+            AddMode::PlayNext | AddMode::PlayNow => data.current_entry_id.as_ref()
                 .and_then(|id| data.queue.iter().position(|entry| &entry.entry_id == id))
                 .map(|index| index + 1)
                 .unwrap_or(0),
-            _ => data.queue.len(),
+            AddMode::Append => data.queue.len(),
         };
         for (offset, entry) in entries.into_iter().enumerate() {
             data.queue.insert(insert_at + offset, entry);
@@ -984,8 +987,7 @@ impl PlaybackEngine {
         self.rebuild_shuffle_order(&mut data);
         self.persist(&data);
         let first_id = match mode {
-            AddMode::PlayNext => data.queue.get(insert_at).map(|entry| entry.entry_id.clone()),
-            AddMode::PlayNow => data.queue.get(insert_at).map(|entry| entry.entry_id.clone()),
+            AddMode::PlayNext | AddMode::PlayNow => data.queue.get(insert_at).map(|entry| entry.entry_id.clone()),
             AddMode::Append => None,
         };
         drop(data);
@@ -1005,7 +1007,19 @@ impl PlaybackEngine {
     pub fn queue_add_playlist(&self, playlist_id: i64, mode: AddMode) -> Result<Vec<EngineEffect>, String> {
         let ids = self.list_playlist_items(playlist_id)?.into_iter().map(|item| item.media_file_id).collect::<Vec<_>>();
         let mut effects = self.queue_add(ids, mode)?;
-        effects.push(EngineEffect::Notify { level: "info".to_string(), message: "Playlist added to the queue.".to_string() });
+        // PlayNow is a playback command, not an add-to-queue command. Emitting a
+        // generic queue notice here hid the real "Playing playlist" message.
+        match mode {
+            AddMode::Append => effects.push(EngineEffect::Notify {
+                level: "info".to_string(),
+                message: "Playlist added to the queue.".to_string(),
+            }),
+            AddMode::PlayNext => effects.push(EngineEffect::Notify {
+                level: "info".to_string(),
+                message: "Playlist queued to play next.".to_string(),
+            }),
+            AddMode::PlayNow => {}
+        }
         Ok(effects)
     }
 
@@ -1097,8 +1111,20 @@ impl PlaybackEngine {
     }
 
     pub fn play_media_now(&self, media_file_id: i64) -> Result<Vec<EngineEffect>, String> {
-        let effects = self.queue_add(vec![media_file_id], AddMode::PlayNow)?;
-        Ok(effects)
+        // Playing a row from a playlist should reuse that row's queue position.
+        // Otherwise the video is appended at the tail (or, after the insertion
+        // fix, duplicated after the current item) and Next can reach the end
+        // earlier than the user expects.
+        let existing = {
+            let data = self.lock();
+            data.queue.iter()
+                .find(|entry| entry.media_file_id == media_file_id && entry.availability_state == "available")
+                .map(|entry| entry.entry_id.clone())
+        };
+        if let Some(entry_id) = existing {
+            return self.play_now(entry_id);
+        }
+        self.queue_add(vec![media_file_id], AddMode::PlayNow)
     }
 
     pub fn next(&self) -> Result<Vec<EngineEffect>, String> {
@@ -1121,9 +1147,16 @@ impl PlaybackEngine {
             let first = { let data = self.lock(); self.wrap_first_index(&data) };
             if let Some(first) = first { self.begin_entry(first, 0.0, &mut effects); }
         } else {
+            // Stop the receiver too: leaving it playing while the UI reports
+            // the end of the queue contradicts the visible state and can make
+            // late events look like a queued item.
+            self.finish_current(false, &mut effects);
+            effects.push(EngineEffect::Stop);
             let mut data = self.lock();
             data.state = if mode == PlaybackMode::Manual { EngineState::WaitingForManualSelection } else { EngineState::Completed };
             data.message = Some("End of queue.".to_string());
+            data.cast_session_id = None;
+            data.media_session_id = None;
             effects.push(EngineEffect::Notify { level: "info".to_string(), message: "End of queue.".to_string() });
             self.persist(&data);
         }
@@ -1289,15 +1322,19 @@ impl PlaybackEngine {
             if token_matches {
                 let mut data = self.lock();
                 let current_entry_id = data.current_entry_id.clone();
+                // A failed load is a transport/network error, not proof that the
+                // file is unavailable. Keep the entry retryable so a transient
+                // receiver or LAN problem cannot silently exhaust the queue.
                 if let Some(entry) = data.queue.iter_mut().find(|entry| Some(&entry.entry_id) == current_entry_id.as_ref()) {
-                    entry.status = EntryStatus::Unavailable;
+                    if entry.status == EntryStatus::Playing { entry.status = EntryStatus::Pending; }
                 }
                 data.state = EngineState::Error;
                 data.last_error = Some(event.message.clone().unwrap_or_else(|| "The receiver could not load this video.".to_string()));
-                effects.push(EngineEffect::Notify { level: "error".to_string(), message: data.last_error.clone().unwrap() });
-                let mode = data.mode;
+                effects.push(EngineEffect::Notify { level: "error".to_string(), message: "The receiver could not load this video. Use Next to skip it, or Reconnect & resume to retry.".to_string() });
+                data.current_token = None;
+                data.cast_session_id = None;
+                data.media_session_id = None;
                 self.persist(&data);
-                if mode == PlaybackMode::Auto { self.next_inside_completion(&mut effects); }
             }
             return effects;
         }
@@ -1378,9 +1415,15 @@ impl PlaybackEngine {
                 return;
             }
         }
+        // Automatic completion ends in the same visible state as manual Next:
+        // stop the receiver and retire stale session ids so late events cannot
+        // look like a queued item.
+        effects.push(EngineEffect::Stop);
         let mut data = self.lock();
         data.state = if data.mode == PlaybackMode::Manual { EngineState::WaitingForManualSelection } else { EngineState::Completed };
         data.message = Some("Queue completed.".to_string());
+        data.cast_session_id = None;
+        data.media_session_id = None;
         effects.push(EngineEffect::Notify { level: "info".to_string(), message: "Queue completed.".to_string() });
         self.persist(&data);
     }
@@ -1659,6 +1702,31 @@ mod tests {
     }
 
     #[test]
+    fn automatic_completion_at_end_stops_receiver_and_clears_sessions() {
+        let fixture = Fixture::new();
+        let ids = fixture.media_ids(2);
+        fixture.engine.queue_add(ids, AddMode::Append).unwrap();
+        fixture.engine.set_mode(PlaybackMode::Auto).unwrap();
+        let first = fixture.engine.snapshot().queue[0].entry_id.clone();
+        let effects = fixture.engine.play_now(first).unwrap();
+        let (_, _, token) = Fixture::load_effect(&effects);
+
+        fixture.engine.on_cast_event(Fixture::status_with_ids(&token, "PLAYING", 5.0, "receiver-1", 11));
+        fixture.engine.on_cast_event(Fixture::finishes_with_ids(&token, "receiver-1", 11));
+
+        let second_token = fixture.engine.snapshot().playback_token.clone().unwrap();
+        fixture.engine.on_cast_event(Fixture::status_with_ids(&second_token, "PLAYING", 5.0, "receiver-1", 12));
+        let effects = fixture.engine.on_cast_event(Fixture::finishes_with_ids(&second_token, "receiver-1", 12));
+
+        assert!(effects.iter().any(|effect| matches!(effect, EngineEffect::Stop)));
+        let snapshot = fixture.engine.snapshot();
+        assert_eq!(snapshot.state, EngineState::Completed);
+        assert_eq!(snapshot.message.as_deref(), Some("Queue completed."));
+        assert!(snapshot.cast_session_id.is_none());
+        assert!(snapshot.media_session_id.is_none());
+    }
+
+    #[test]
     fn playlist_advances_when_receiver_changes_media_session_id_per_item() {
         let fixture = Fixture::new();
         let ids = fixture.media_ids(3);
@@ -1779,6 +1847,61 @@ mod tests {
     }
 
     #[test]
+    fn play_now_keeps_the_rest_of_the_queue_reachable() {
+        let fixture = Fixture::new();
+        let ids = fixture.media_ids(4);
+        fixture.engine.queue_add(ids[..3].to_vec(), AddMode::Append).unwrap();
+        let first_id = fixture.engine.snapshot().queue[0].entry_id.clone();
+        fixture.engine.play_now(first_id).unwrap();
+
+        let effects = fixture.engine.play_media_now(ids[3]).unwrap();
+        let (_, current_id, _) = Fixture::load_effect(&effects);
+        let snapshot = fixture.engine.snapshot();
+        let current_index = snapshot.queue.iter().position(|entry| entry.entry_id == current_id).unwrap();
+        assert_eq!(current_index, 1, "PlayNow must not append a new current item to the tail");
+        assert_eq!(snapshot.queue[current_index + 1].media_file_id, ids[1]);
+
+        let next_effects = fixture.engine.next().unwrap();
+        let (_, next_id, _) = Fixture::load_effect(&next_effects);
+        assert_eq!(next_id, snapshot.queue[current_index + 1].entry_id);
+    }
+
+    #[test]
+    fn playing_a_queued_playlist_item_reuses_its_queue_position() {
+        let fixture = Fixture::new();
+        let ids = fixture.media_ids(3);
+        fixture.engine.queue_add(ids.clone(), AddMode::Append).unwrap();
+        let target_id = fixture.engine.snapshot().queue[1].entry_id.clone();
+
+        let effects = fixture.engine.play_media_now(ids[1]).unwrap();
+        let (_, current_id, _) = Fixture::load_effect(&effects);
+        assert_eq!(current_id, target_id);
+        assert_eq!(fixture.engine.snapshot().queue.len(), 3, "play must not duplicate a queued item");
+        let next_effects = fixture.engine.next().unwrap();
+        let (_, next_id, _) = Fixture::load_effect(&next_effects);
+        assert_eq!(next_id, fixture.engine.snapshot().queue[2].entry_id);
+    }
+
+    #[test]
+    fn playlist_play_now_does_not_emit_an_add_to_queue_notice() {
+        let fixture = Fixture::new();
+        let ids = fixture.media_ids(2);
+        let playlist_id = fixture.engine.create_playlist("Trip".to_string()).unwrap();
+        fixture.engine.add_playlist_items(playlist_id, &ids).unwrap();
+        let effects = fixture.engine.queue_add_playlist(playlist_id, AddMode::PlayNow).unwrap();
+        assert!(Fixture::load_effect(&effects).0 > 0);
+        assert!(!effects.iter().any(|effect| matches!(
+            effect,
+            EngineEffect::Notify { message, .. } if message.to_lowercase().contains("added to the queue")
+        )));
+        let append_effects = fixture.engine.queue_add_playlist(playlist_id, AddMode::Append).unwrap();
+        assert!(append_effects.iter().any(|effect| matches!(
+            effect,
+            EngineEffect::Notify { message, .. } if message.contains("Playlist added to the queue.")
+        )));
+    }
+
+    #[test]
     fn automatic_completion_advances_only_on_correlated_real_event() {
         let fixture = Fixture::new();
         let ids = fixture.media_ids(3);
@@ -1808,6 +1931,33 @@ mod tests {
         let effects = fixture.engine.on_cast_event(Fixture::completes(&token));
         assert!(effects.is_empty());
         assert_eq!(fixture.engine.snapshot().playback_token, Some(second_token));
+    }
+
+    #[test]
+    fn load_failure_keeps_the_item_retryable_instead_of_draining_the_queue() {
+        let fixture = Fixture::new();
+        let ids = fixture.media_ids(2);
+        fixture.engine.queue_add(ids.clone(), AddMode::Append).unwrap();
+        fixture.engine.set_mode(PlaybackMode::Auto).unwrap();
+        let first = fixture.engine.snapshot().queue[0].entry_id.clone();
+        let effects = fixture.engine.play_now(first.clone()).unwrap();
+        let (_, _, token) = Fixture::load_effect(&effects);
+        fixture.engine.on_cast_event(Fixture::status(&token, "PLAYING", 1.0));
+
+        fixture.engine.on_cast_event(CastStatusEvent {
+            kind: "load_failed".to_string(),
+            playback_token: Some(token),
+            message: Some("Receiver could not fetch the file".to_string()),
+            ..Default::default()
+        });
+        let snapshot = fixture.engine.snapshot();
+        assert_eq!(snapshot.state, EngineState::Error);
+        assert_eq!(snapshot.current_entry_id, Some(first.clone()));
+        assert_eq!(snapshot.queue[0].status, EntryStatus::Pending);
+
+        let retry = fixture.engine.recover().unwrap();
+        let (_, retried_id, _) = Fixture::load_effect(&retry);
+        assert_eq!(retried_id, first);
     }
 
     #[test]

@@ -1297,6 +1297,20 @@ mod tests {
     }
 
     #[test]
+    fn sender_page_reports_live_media_state_not_only_remote_player_state() {
+        // The receiver's media object is authoritative when RemotePlayer has
+        // not caught up; stale/finished media is still excluded by the page.
+        assert!(SENDER_JS.contains("function playbackMedia()"));
+        assert!(SENDER_JS.contains("!isStaleMedia(media)"));
+        assert!(SENDER_JS.contains("liveMedia && liveMedia.playerState"));
+        assert!(SENDER_JS.contains("playbackPosition(liveMedia, duration)"));
+        assert!(SENDER_JS.contains("position_seconds: position"));
+        assert!(SENDER_JS.contains("typeof preferredMedia.addEventListener"));
+        assert!(SENDER_JS.contains("getEstimatedTime"));
+        assert!(SENDER_JS.contains("new chrome.cast.media.GetStatusRequest()"));
+    }
+
+    #[test]
     fn stale_sender_session_events_cannot_clear_the_active_receiver() {
         let active = Some("session-123".to_string());
         let same = Some("session-123".to_string());

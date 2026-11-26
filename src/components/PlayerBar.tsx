@@ -18,6 +18,7 @@ export type PlayerBarProps = {
   progressPercent: number
   previousTitle: string
   queueAvailable: boolean
+  nextAvailable?: boolean
   muted: boolean
   volume: number
   onPrevious: () => void
@@ -46,6 +47,7 @@ export default function PlayerBar({
   progressPercent,
   previousTitle,
   queueAvailable,
+  nextAvailable,
   muted,
   volume,
   onPrevious,
@@ -60,6 +62,7 @@ export default function PlayerBar({
 }: PlayerBarProps) {
   const canControlPlayback = castReady && castConnected && castHasMedia
   const canUseQueue = playlistReady && queueAvailable
+  const canUseNext = playlistReady && (nextAvailable ?? queueAvailable)
   const canSeek = canControlPlayback && castDuration > 0
   const canUseVolume = castReady && castConnected
   const isBuffering = castConnected && castHasMedia && castState === 'BUFFERING'
@@ -90,7 +93,7 @@ export default function PlayerBar({
           >
             {isBuffering ? <LoaderCircle size={17} className="spin-icon" /> : isPlaying ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" />}
           </button>
-          <button disabled={!canUseQueue} onClick={onNext} aria-label="Next video" title="Next video"><SkipForward size={18} /></button>
+          <button disabled={!canUseNext} onClick={onNext} aria-label="Next video" title={canUseNext ? 'Next video' : 'End of queue'}><SkipForward size={18} /></button>
         </div>
         <div className="player-progress">
           <span>{formatSeconds(displayedPosition)}</span>

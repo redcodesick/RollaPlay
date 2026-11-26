@@ -3,9 +3,12 @@
  * Runs in a Chrome application-mode window served from http://127.0.0.1, a
  * secure context accepted by the official Google Cast Web Sender SDK.
  * Commands arrive over Server-Sent Events from the desktop app; playback
- * status comes exclusively from cast.framework RemotePlayer events — the
- * page never simulates progress with timers, never renders the streaming
- * URL (which embeds a short-lived credential), and never persists anything.
+ * status comes exclusively from real Cast SDK media state. It is posted on
+ * SDK events and by a conservative one-second read of that same state, using
+ * the SDK's own getStatus() refresh and getEstimatedTime() estimate because
+ * Media.currentTime is only updated sporadically. The page never simulates
+ * progress with timers, never renders the streaming URL (which embeds a
+ * short-lived credential), and never persists anything.
  *
  * The page intentionally has no playback or window controls. The app owns the
  * player UI and the Connect panel; this page only hosts the official SDK.
@@ -58,6 +61,8 @@
   let player = null;
   let controller = null;
   let lastStatusPost = 0;
+  let lastStatusRefresh = 0;
+  let statusRefreshInFlight = false;
   let currentTitle = null;
   let pendingLoad = null;
   let pendingDeviceRequested = false;
@@ -146,6 +151,63 @@
     return activeDeviceName() || 'Cast device';
   }
 
+  /* The RemotePlayer can briefly report IDLE while the underlying receiver
+   * media object already has a live PLAYING status. Prefer that real media
+   * status, but never let a finished/previous item report progress for the
+   * current playback token. */
+  function playbackMedia() {
+    const media = correlation();
+    return media && !isStaleMedia(media) ? media : null;
+  }
+
+  /* Media.currentTime is documented as sporadic. getEstimatedTime() is the
+   * SDK's own estimate from the last real receiver status and playback rate.
+   * Fall back in strict order; never invent a value when none is reported. */
+  function playbackPosition(media, duration) {
+    if (media && typeof media.getEstimatedTime === 'function') {
+      const estimate = media.getEstimatedTime();
+      if (Number.isFinite(estimate) && estimate >= 0) {
+        const bounded = Number.isFinite(duration) && duration > 0 ? Math.min(estimate, duration) : estimate;
+        return { position: bounded, source: 'media_estimate' };
+      }
+    }
+    if (media && Number.isFinite(media.currentTime) && media.currentTime >= 0) {
+      const bounded = Number.isFinite(duration) && duration > 0 ? Math.min(media.currentTime, duration) : media.currentTime;
+      return { position: bounded, source: 'media' };
+    }
+    if (player && Number.isFinite(player.currentTime) && player.currentTime >= 0) {
+      const bounded = Number.isFinite(duration) && duration > 0 ? Math.min(player.currentTime, duration) : player.currentTime;
+      return { position: bounded, source: 'player' };
+    }
+    return { position: 0, source: 'none' };
+  }
+
+  /* Requests a fresh status from the receiver. This is a real Cast SDK call,
+   * not a timer-driven progress guess. It is rate-limited and never carries
+   * a URL, token, filename, or path. */
+  function refreshMediaStatus() {
+    const now = Date.now();
+    if (statusRefreshInFlight || now - lastStatusRefresh < 4000) return;
+    const media = playbackMedia();
+    if (!media || typeof media.getStatus !== 'function') return;
+    if (!window.chrome || !chrome.cast || !chrome.cast.media || !chrome.cast.media.GetStatusRequest) return;
+    statusRefreshInFlight = true;
+    lastStatusRefresh = now;
+    try {
+      media.getStatus(
+        new chrome.cast.media.GetStatusRequest(),
+        () => {
+          statusRefreshInFlight = false;
+          if (isStaleMedia(media)) return;
+          onMediaStatusUpdated({ data: media });
+        },
+        () => { statusRefreshInFlight = false; },
+      );
+    } catch (_) {
+      statusRefreshInFlight = false;
+    }
+  }
+
   function tryInitFramework() {
     if (frameworkAvailability === null || !domReady || frameworkReady) return;
     if (!frameworkAvailability || !window.cast || !window.chrome || !window.chrome.cast || !window.chrome.cast.media) {
@@ -195,6 +257,14 @@
     onCastStateChanged();
     onSessionStateChanged({ sessionState: context.getSessionState() });
     postStatus(true);
+    // Some receivers do not emit RemotePlayer time updates for every media
+    // status change. Read the same real media object once per second only while
+    // a live media session exists; no progress is invented here.
+    window.setInterval(() => {
+      if (!frameworkReady || !playbackMedia()) return;
+      postStatus(true);
+      refreshMediaStatus();
+    }, 1000);
   }
 
   function onCastStateChanged() {
@@ -258,12 +328,14 @@
     const now = Date.now();
     if (!force && now - lastStatusPost < 900) return;
     lastStatusPost = now;
-    if (!player || !player.isConnected) {
+    const liveMedia = playbackMedia();
+    if (!player || (!player.isConnected && !liveMedia)) {
       post({
         type: 'media_status',
         player_state: 'IDLE',
         position_seconds: 0,
         duration_seconds: 0,
+        time_source: 'none',
         device_name: activeDeviceName(),
         playback_token: currentPlaybackToken,
         cast_session_id: currentCastSessionId,
@@ -272,14 +344,20 @@
       });
       return;
     }
+    const state = clampText(liveMedia && liveMedia.playerState, 30) ||
+      clampText(player && player.playerState, 30) || 'IDLE';
+    const duration = Number.isFinite(liveMedia && liveMedia.duration) ? liveMedia.duration :
+      (Number.isFinite(player && player.duration) ? player.duration : 0);
+    const { position, source: timeSource } = playbackPosition(liveMedia, duration);
     post({
       type: 'media_status',
-      player_state: clampText(player.playerState, 30) || 'IDLE',
-      position_seconds: Number.isFinite(player.currentTime) ? player.currentTime : 0,
-      duration_seconds: Number.isFinite(player.duration) ? player.duration : 0,
+      player_state: state,
+      position_seconds: position,
+      duration_seconds: duration,
+      time_source: timeSource,
       device_name: activeDeviceName(),
-      volume_level: Number.isFinite(player.volumeLevel) ? player.volumeLevel : 1,
-      muted: !!player.isMuted,
+      volume_level: Number.isFinite(player && player.volumeLevel) ? player.volumeLevel : 1,
+      muted: !!(player && player.isMuted),
       playback_token: currentPlaybackToken,
       cast_session_id: currentCastSessionId,
       media_session_id: currentMediaSessionId,
@@ -309,10 +387,14 @@
     return media || null;
   }
 
-  function attachMediaSessionListener() {
+  function attachMediaSessionListener(preferredMedia) {
     if (!window.chrome || !chrome.cast || !chrome.cast.media) return;
-    const media = correlation();
-    if (!media || media === activeMediaSession) return;
+    // Event data is normally the real Media object. If an SDK version supplies
+    // a plain status object, keep the session's Media object as the listener.
+    const media = preferredMedia && typeof preferredMedia.addEventListener === 'function'
+      ? preferredMedia
+      : correlation();
+    if (!media || isStaleMedia(media) || media === activeMediaSession) return;
     if (activeMediaSession && typeof activeMediaSession.removeEventListener === 'function') {
       activeMediaSession.removeEventListener(chrome.cast.media.MediaEventType.MEDIA_STATUS_UPDATED, onMediaStatusUpdated);
     }
@@ -380,9 +462,9 @@
   }
 
   function onMediaStatusUpdated(event) {
-    attachMediaSessionListener();
     const media = (event && event.data) || activeMediaSession || correlation();
     if (!media) return;
+    attachMediaSessionListener(media);
     if (Number.isFinite(media.mediaSessionId) && !isStaleMedia(media)) {
       currentMediaSessionId = media.mediaSessionId;
       activeLoadMediaSessionId = media.mediaSessionId;
@@ -473,6 +555,7 @@
     previousMediaSessionId = currentMediaSessionId;
     activeLoadMediaSessionId = null;
     currentMediaSessionId = null;
+    lastStatusRefresh = 0;
     try {
       const mediaInfo = new chrome.cast.media.MediaInfo(command.url, clampText(command.mime_type, 80) || 'video/mp4');
       const metadata = new chrome.cast.media.MovieMediaMetadata();
@@ -572,7 +655,11 @@
     } catch (error) {
       post({ type: 'sender_error', message: clampText('Control "' + action + '" failed: ' + String(error), 380) });
     }
-    setTimeout(() => postStatus(true), 150);
+    lastStatusRefresh = 0;
+    setTimeout(() => {
+      postStatus(true);
+      refreshMediaStatus();
+    }, 150);
   }
 
   function handleCommand(command) {

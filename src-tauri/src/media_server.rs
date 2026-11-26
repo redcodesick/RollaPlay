@@ -58,6 +58,18 @@ pub fn is_cast_supported_extension(extension: &str) -> bool {
     matches!(extension.to_ascii_lowercase().as_str(), "mp4" | "m4v" | "webm" | "mkv")
 }
 
+/// Detects an AV1 track in a WebM/MKV header. This is a compatibility hint
+/// only: playback is never blocked from it. The probe stays inside the local
+/// backend and no codec string or filename is shown to the receiver or UI.
+pub fn detect_av1_webm(extension: &str, prefix: &[u8]) -> bool {
+    let normalized = extension.trim_start_matches('.').to_ascii_lowercase();
+    if normalized != "webm" && normalized != "mkv" {
+        return false;
+    }
+    prefix.windows(5).any(|window| window == b"V_AV1")
+        || prefix.windows(4).any(|window| window == b"av01")
+}
+
 /// Short-lived, media-scoped streaming credential for Cast receivers.
 /// Receivers cannot send `Authorization` headers, so the sender requests a
 /// scoped URL from the Tauri backend and passes it to the receiver. Grants
@@ -404,8 +416,10 @@ struct OpenedMedia {
     file: File,
     size: u64,
     filename: String,
+    extension: String,
     mime_type: String,
     mime_source: &'static str,
+    probe: Vec<u8>,
 }
 
 pub fn router(state: MediaHttpState) -> Router {
@@ -415,7 +429,7 @@ pub fn router(state: MediaHttpState) -> Router {
         .with_state(state)
 }
 
-fn same_ipv4_subnet(client: std::net::Ipv4Addr, lan: std::net::Ipv4Addr, prefix_length: u8) -> bool {
+pub(crate) fn same_ipv4_subnet(client: std::net::Ipv4Addr, lan: std::net::Ipv4Addr, prefix_length: u8) -> bool {
     if !(1..=32).contains(&prefix_length) {
         return false;
     }
@@ -736,8 +750,9 @@ fn open_registered_media(database: &Arc<Mutex<Connection>>, media_id: i64) -> Re
     let mut probe = vec![0_u8; MIME_PROBE_BYTES];
     let read = file.read(&mut probe).map_err(|_| MediaOpenError::Internal)?;
     let (mime_type, mime_source) = detect_mime(&extension, &probe[..read]);
+    probe.truncate(read);
     file.seek(SeekFrom::Start(0)).map_err(|_| MediaOpenError::Internal)?;
-    Ok(OpenedMedia { file, size, filename, mime_type, mime_source })
+    Ok(OpenedMedia { file, size, filename, extension, mime_type, mime_source, probe })
 }
 
 fn map_file_error(error: std::io::Error) -> MediaOpenError {
@@ -810,6 +825,9 @@ pub struct CastStreamUrl {
     pub mime_type: String,
     pub mime_source: String,
     pub expires_in_seconds: u64,
+    /// Fixed compatibility hint for the UI. It never carries codec strings,
+    /// filenames, or paths.
+    pub av1_webm: bool,
 }
 
 /// Strips the credential query from a cast URL so diagnostics can display the
@@ -974,6 +992,19 @@ impl MediaServerManager {
         self.inner.shared.diagnostics.snapshot()
     }
 
+    /// Reads only the registered file's header to answer one fixed question:
+    /// does the current WebM/MKV use AV1? Failures return `false`; no path or
+    /// raw error text leaves this function.
+    pub async fn probe_av1_webm(&self, media_id: i64) -> bool {
+        let database = Arc::clone(&self.inner.database);
+        task::spawn_blocking(move || match open_registered_media(&database, media_id) {
+            Ok(opened) => detect_av1_webm(&opened.extension, &opened.probe),
+            Err(_) => false,
+        })
+        .await
+        .unwrap_or(false)
+    }
+
     pub fn pairing_token(&self) -> String {
         self.inner.shared.token.to_string()
     }
@@ -999,40 +1030,31 @@ impl MediaServerManager {
             runtime.address
         };
         let database = Arc::clone(&self.inner.database);
-        let filename_extension = task::spawn_blocking(move || {
-            let connection = database.lock().map_err(|_| "Local database is unavailable".to_string())?;
-            connection
-                .query_row(
-                    "SELECT f.filename, f.extension FROM media_files f
-                     JOIN media_directories d ON d.id = f.directory_id
-                     WHERE f.id = ?1 AND f.is_available = 1 AND d.is_active = 1",
-                    [media_id],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                )
-                .optional()
-                .map_err(|_| "Could not look up the media file".to_string())
-                .map(|found| found.ok_or_else(|| "This video is unavailable. Rescan its folder before casting.".to_string()))
-        })
-        .await
-        .map_err(|_| "Could not look up the media file".to_string())??;
-        let (filename, extension) = filename_extension?;
-        let normalized_extension = extension.trim_start_matches('.').to_ascii_lowercase();
+        let opened = task::spawn_blocking(move || open_registered_media(&database, media_id))
+            .await
+            .map_err(|_| "Could not read the video for casting.".to_string())?;
+        let opened = opened.map_err(|error| match error {
+            MediaOpenError::NotFound => "This video is unavailable. Rescan its folder before casting.".to_string(),
+            MediaOpenError::OutsideApprovedDirectory => "This video is outside an approved library folder.".to_string(),
+            MediaOpenError::Internal => "Could not read the video for casting.".to_string(),
+        })?;
+        let normalized_extension = opened.extension.trim_start_matches('.').to_ascii_lowercase();
         if !is_cast_supported_extension(&normalized_extension) {
-            return Err(format!(
-                "{} files cannot be played by the Cast Default Media Receiver. Use MP4, M4V, WebM, or MKV with H.264/VP9 video and AAC audio.",
-                extension.to_ascii_uppercase()
-            ));
+            return Err(
+                "This video format cannot be played by the Cast Default Media Receiver. Use MP4, M4V, WebM, or MKV with H.264/VP9 video and AAC audio.".to_string(),
+            );
         }
-        let (mime_type, mime_source) = detect_mime(&normalized_extension, &[]);
+        let av1_webm = detect_av1_webm(&normalized_extension, &opened.probe);
         let (token, validity) = self.inner.shared.cast_grants.create(media_id);
         let url = format!("http://{}/media/{}?cast_token={}", address, media_id, token);
         Ok(CastStreamUrl {
             url,
             media_id,
-            filename,
-            mime_type,
-            mime_source: mime_source.to_string(),
+            filename: opened.filename,
+            mime_type: opened.mime_type,
+            mime_source: opened.mime_source.to_string(),
             expires_in_seconds: validity.as_secs(),
+            av1_webm,
         })
     }
 
@@ -1665,6 +1687,15 @@ mod tests {
         let (mime, source) = detect_mime("mp4", &[0xff, 0xd8, 0xff, 0xe0]);
         assert_eq!(mime, "application/octet-stream");
         assert_eq!(source, "non-video-signature");
+    }
+
+    #[test]
+    fn av1_hint_is_limited_to_webm_and_mkv_headers() {
+        assert!(detect_av1_webm("webm", b"\x1aE\xdf\xa3V_AV1A_OPUS"));
+        assert!(detect_av1_webm("MKV", b"header av01 track"));
+        assert!(!detect_av1_webm("webm", b"V_VP9A_OPUS"));
+        assert!(!detect_av1_webm("mp4", b"V_AV1av01"));
+        assert!(!detect_av1_webm("webm", b""));
     }
 
     #[test]

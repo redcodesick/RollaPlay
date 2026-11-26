@@ -78,6 +78,18 @@ These tests were executed in this packaged-app validation run: 60 passed, 0 fail
 - [x] 23. Confirm no token leakage: reveal the pairing token in Settings, run a cast, and search the Cast panel diagnostics, sender page source, and any logs for the token value — it must never appear. The scoped URL must never be rendered in the sender page DOM.
 - [x] 24. Confirm administrative actions (start/stop server, port changes, sender launch) are only available through the Tauri UI; the media server HTTP surface still exposes only `/media/{id}`, `/health`, and now the media-scoped `cast_token` query acceptance.
 
+### Network compatibility diagnostics
+
+- [ ] 26. With the receiver powered on and a video selected, open Settings → Diagnostics and run the checks. Confirm the report shows fixed statuses only: no pairing token, scoped media URL, file path, client key, raw device response, or raw error text appears anywhere in the panel.
+- [ ] 27. Repeat the checks from a different network (for example, a guest SSID or a receiver on another subnet). Confirm the receiver subnet and control-port rows distinguish a discovery/control problem from a media-fetch problem, and that the guidance stays generic rather than exposing addresses.
+- [ ] 28. After a failed load, confirm Queue continuation reports the final entry honestly and the receiver is stopped instead of appearing to play while the UI says the queue ended.
+- [ ] 29. Cast an AV1/Opus WebM. Confirm playback is still allowed, one fixed AV1 compatibility warning appears, and Settings → Diagnostics shows the same fixed warning with no codec string, filename, or path. If the Mi Box plays the video but the app used to show Idle, confirm the player state and seek bar now follow the receiver's live media status.
+- [ ] 30. With five receivers discovered, run Settings → Diagnostics while playing. Confirm "Active receiver match" is OK for the actual session and that no receiver name, address, SSID, BSSID, token, URL, path, or raw output appears in the panel or event log.
+- [ ] 31. Compare the link-quality tiers at the failing distance and next to the router. Confirm the adapter/band/channel rows, signal tier, link-speed tier, receiver-fetch throughput tier, and interruption tier change from the real local data. Windows does not expose channel width, so that row must say "Not exposed by Windows"; use the router settings to try channels 1/6/11, 20 MHz, or 5 GHz.
+- [ ] 32. Seek manually to the middle of the video. Confirm the seek bar stays at the receiver's position after the refresh, without inventing progress while paused or stalled.
+- [ ] 33. In **Downloader**, tick **Convert to TV-friendly MP4** and download an AV1/WebM source. Confirm the progress row shows a real checking/converting phase, the saved library file is H.264/AAC MP4, the original is gone after verification, and no raw FFmpeg output, URL, path, token, or filename appears in the UI or diagnostics.
+- [ ] 34. Repeat with an already H.264/AAC MP4 and confirm it is left untouched. Cancel a conversion in progress and confirm the original file stays playable.
+
 ### Whole-playlist completion
 
 - [x] 25. Play a saved playlist with three short, supported files in Automatic mode. Each item must advance only after the receiver reports `IdleReason.FINISHED` for **that** load, with a changing `mediaSessionId` and a matching playback token. No timer or estimated duration may advance the queue. Repeat One, Repeat All, Manual wait, and a late `FINISHED` from the previous item must behave as documented. First run FAILED (playback stopped at the end); the sender stale-media latch was fixed and the user confirmed progression works on the rebuilt installer.
@@ -85,6 +97,6 @@ These tests were executed in this packaged-app validation run: 60 passed, 0 fail
 ## Known limitations to document when testing
 
 - DLNA/UPnP playback and LG webOS SSAP control are tracked separately in [docs/dlna-lg-validation.md](dlna-lg-validation.md). That work is not part of the validated 0.3.x Cast release until the hardware checklist passes.
-- The Default Media Receiver plays MP4/M4V/WebM/MKV containers; codec support depends on the Mi Box hardware (H.264/VP9 + AAC are safe). AVI/WMV/MPEG-PS are rejected before casting.
+- The Default Media Receiver plays MP4/M4V/WebM/MKV containers; codec support depends on the Mi Box hardware (H.264/VP9 + AAC or Opus are safest). AV1 WebM is allowed but shows a fixed compatibility warning because some receivers play it while reporting an Idle state. AVI/WMV/MPEG-PS are rejected before casting.
 - Connect lists real receivers from LAN mDNS, but the official Web Sender SDK has no supported API to select a receiver by id. Choosing a device opens Chrome's Cast dialog with the name shown as guidance; the actual connection is still made by that dialog, and no success is reported until a real session event arrives.
 - Cast discovery requires mDNS to be permitted between the PC and the Mi Box (AP isolation must be off).

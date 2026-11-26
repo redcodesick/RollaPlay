@@ -1,7 +1,10 @@
 //! YouTube downloader for Cast-friendly media.
 //!
 //! The Downloader fetches a progressive H.264/AAC MP4 by default. HD quality
-//! merges separate AVC/AAC streams with FFmpeg. Tools are never bundled: they
+//! merges separate AVC/AAC streams with FFmpeg. The opt-in TV-compatible mode
+//! checks the real streams and re-encodes only unsupported files to H.264/AAC
+//! MP4, replacing the original after the result is verified. Tools are never
+//! bundled: they
 //! are installed into app-local data from their official GitHub releases or,
 //! when ticked in the UI, with WinGet. Discovery always prefers that app-local
 //! copy so a stale WinGet folder cannot shadow a known-good tool. Whole
@@ -30,6 +33,7 @@ const SD_FORMAT: &str = "best[ext=mp4][acodec!=none][vcodec!=none]/18";
 const HD_FORMAT: &str = "bv*[vcodec^=avc]+ba[acodec^=mp4a]/b[ext=mp4]/b";
 const POLL_INTERVAL: Duration = Duration::from_millis(120);
 const STALL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const CONVERSION_STALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const TOOL_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const INSTALL_SCRIPT: &str = include_str!("../../scripts/install-downloader-tools.ps1");
 const WINGET_SCRIPT: &str = include_str!("../../scripts/install-downloader-tools-winget.ps1");
@@ -64,6 +68,26 @@ pub struct DownloadProgress {
 pub struct ToolInstallProgress {
     pub phase: &'static str,
     pub detail: String,
+}
+
+#[derive(Clone, Copy)]
+enum FfmpegFailure {
+    Cancelled,
+    Stalled,
+    Message(&'static str),
+}
+
+#[derive(Clone, Copy, Default)]
+struct StreamProbe {
+    video_h264: bool,
+    audio_aac: bool,
+    has_audio: bool,
+}
+
+impl StreamProbe {
+    fn tv_ready(&self) -> bool {
+        self.video_h264 && (!self.has_audio || self.audio_aac)
+    }
 }
 
 #[derive(Default)]
@@ -440,6 +464,283 @@ fn log_unmapped_error(app: &AppHandle, line: &str) {
     );
 }
 
+/// Reads only the stream descriptions FFmpeg prints for an input file. No
+/// filename, metadata value or raw FFmpeg line is retained.
+fn parse_stream_probe(stderr: &str) -> StreamProbe {
+    let lower = stderr.to_ascii_lowercase();
+    StreamProbe {
+        video_h264: lower.contains("video: h264") || lower.contains("video: avc1"),
+        audio_aac: lower.contains("audio: aac") || lower.contains("audio: mp4a"),
+        has_audio: lower.contains("audio:"),
+    }
+}
+
+fn join_ffmpeg_threads(
+    stdout: &mut Option<std::thread::JoinHandle<()>>,
+    stderr: &mut Option<std::thread::JoinHandle<String>>,
+) -> String {
+    if let Some(thread) = stdout.take() {
+        let _ = thread.join();
+    }
+    stderr
+        .take()
+        .and_then(|thread| thread.join().ok())
+        .unwrap_or_default()
+}
+
+fn ffmpeg_command(tools: &DownloaderTools, args: &[OsString]) -> Result<Command, &'static str> {
+    let executable = tools
+        .ffmpeg_path
+        .clone()
+        .ok_or("FFmpeg is missing or not working. Install it with WinGet and try again.")?;
+    let mut command = Command::new(executable);
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
+    configure_command(&mut command);
+    Ok(command)
+}
+
+/// Runs FFmpeg for probing or conversion. Progress lines are consumed only to
+/// keep the watchdog alive; stderr is returned for fixed-code classification
+/// and is never forwarded verbatim.
+fn run_ffmpeg(
+    tools: &DownloaderTools,
+    args: Vec<OsString>,
+    cancel: &AtomicBool,
+    allowed_codes: &[i32],
+) -> Result<String, FfmpegFailure> {
+    let mut command = ffmpeg_command(tools, &args)
+        .map_err(FfmpegFailure::Message)?;
+    let mut child = command
+        .spawn()
+        .map_err(|_| FfmpegFailure::Message("Could not start FFmpeg. Reinstall it and try again."))?;
+    let last_activity = Arc::new(AtomicU64::new(now_millis()));
+    let mut stdout_thread = child.stdout.take().map(|stdout| {
+        let activity = Arc::clone(&last_activity);
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                activity.store(now_millis(), Ordering::Relaxed);
+                let _ = line;
+            }
+        })
+    });
+    let mut stderr_thread = child.stderr.take().map(|stderr| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            let _ = BufReader::new(stderr).read_to_string(&mut text);
+            text
+        })
+    });
+    let status = loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = join_ffmpeg_threads(&mut stdout_thread, &mut stderr_thread);
+            return Err(FfmpegFailure::Cancelled);
+        }
+        if let Some(status) = child.try_wait().ok().flatten() {
+            break status;
+        }
+        let last = last_activity.load(Ordering::Relaxed);
+        if now_millis().saturating_sub(last) > CONVERSION_STALL_TIMEOUT.as_millis() as u64 {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = join_ffmpeg_threads(&mut stdout_thread, &mut stderr_thread);
+            return Err(FfmpegFailure::Stalled);
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    };
+    let stderr = join_ffmpeg_threads(&mut stdout_thread, &mut stderr_thread);
+    if !allowed_codes.contains(&status.code().unwrap_or(-1)) {
+        return Err(FfmpegFailure::Message(
+            "FFmpeg could not finish the TV-compatible conversion. The original file was kept.",
+        ));
+    }
+    Ok(stderr)
+}
+
+fn probe_tv_streams(
+    tools: &DownloaderTools,
+    path: &Path,
+    cancel: &AtomicBool,
+) -> Result<StreamProbe, FfmpegFailure> {
+    let args = vec![
+        OsString::from("-hide_banner"),
+        OsString::from("-i"),
+        path.as_os_str().to_os_string(),
+    ];
+    // `ffmpeg -i` exits with 1 after printing stream details; that is expected.
+    let stderr = run_ffmpeg(tools, args, cancel, &[0, 1])?;
+    Ok(parse_stream_probe(&stderr))
+}
+
+fn tv_conversion_args(input: &Path, output: &Path) -> Vec<OsString> {
+    vec![
+        OsString::from("-y"),
+        OsString::from("-hide_banner"),
+        OsString::from("-nostdin"),
+        OsString::from("-i"),
+        input.as_os_str().to_os_string(),
+        OsString::from("-map"),
+        OsString::from("0:v:0"),
+        OsString::from("-map"),
+        OsString::from("0:a:0?"),
+        OsString::from("-sn"),
+        OsString::from("-dn"),
+        OsString::from("-c:v"),
+        OsString::from("libx264"),
+        OsString::from("-preset"),
+        OsString::from("veryfast"),
+        OsString::from("-crf"),
+        OsString::from("20"),
+        OsString::from("-pix_fmt"),
+        OsString::from("yuv420p"),
+        OsString::from("-c:a"),
+        OsString::from("aac"),
+        OsString::from("-b:a"),
+        OsString::from("128k"),
+        OsString::from("-movflags"),
+        OsString::from("+faststart"),
+        OsString::from("-progress"),
+        OsString::from("pipe:1"),
+        OsString::from("-nostats"),
+        output.as_os_str().to_os_string(),
+    ]
+}
+
+fn conversion_paths(path: &Path, stamp: u64) -> (PathBuf, PathBuf) {
+    let directory = path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("video");
+    (
+        directory.join(format!("{stem}.rollaplay-tv-{stamp}.mp4")),
+        directory.join(format!("{stem}.rollaplay-orig-{stamp}")),
+    )
+}
+
+fn log_conversion_failure(app: &AppHandle, stderr_len: usize) {
+    // Only the byte count is kept. Conversion stderr can contain local file
+    // names, so no part of it is copied into diagnostics.
+    let _ = crate::wizard_diag_log(
+        app.clone(),
+        "downloader".to_string(),
+        "tv_conversion_failed".to_string(),
+        Some(format!("bytes={stderr_len}")),
+    );
+}
+
+/// Converts one downloaded file to H.264/AAC MP4 only when its real streams
+/// or container are not already TV-friendly. The original is renamed aside
+/// first and removed only after the verified replacement is in place.
+fn convert_to_tv_format(
+    app: &AppHandle,
+    tools: &DownloaderTools,
+    path: &Path,
+    index: usize,
+    total: usize,
+    cancel: &AtomicBool,
+) -> bool {
+    emit(app, index, total, "converting", "Checking video format");
+    let probe = match probe_tv_streams(tools, path, cancel) {
+        Ok(probe) => probe,
+        Err(FfmpegFailure::Cancelled) => {
+            emit(app, index, total, "cancelled", "Download cancelled");
+            return false;
+        }
+        Err(FfmpegFailure::Stalled) => {
+            emit(app, index, total, "failed", "FFmpeg stopped responding during conversion. Reinstall it and try again.");
+            return false;
+        }
+        Err(FfmpegFailure::Message(detail)) => {
+            emit(app, index, total, "failed", detail);
+            return false;
+        }
+    };
+    let already_mp4 = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("mp4"))
+        .unwrap_or(false);
+    if probe.tv_ready() && already_mp4 {
+        emit(app, index, total, "converting", "Already TV-compatible; no conversion needed");
+        return true;
+    }
+
+    emit(app, index, total, "converting", "Converting to TV-friendly H.264/AAC MP4");
+    let stamp = now_millis();
+    let (temporary, backup) = conversion_paths(path, stamp);
+    let stderr = match run_ffmpeg(tools, tv_conversion_args(path, &temporary), cancel, &[0]) {
+        Ok(stderr) => stderr,
+        Err(FfmpegFailure::Cancelled) => {
+            let _ = std::fs::remove_file(&temporary);
+            emit(app, index, total, "cancelled", "Download cancelled");
+            return false;
+        }
+        Err(FfmpegFailure::Stalled) => {
+            let _ = std::fs::remove_file(&temporary);
+            emit(app, index, total, "failed", "Conversion stalled with no output for ten minutes. Try a shorter video or a faster computer.");
+            return false;
+        }
+        Err(FfmpegFailure::Message(detail)) => {
+            let _ = std::fs::remove_file(&temporary);
+            log_conversion_failure(app, detail.len());
+            emit(app, index, total, "failed", detail);
+            return false;
+        }
+    };
+    let usable = temporary
+        .is_file()
+        && std::fs::metadata(&temporary)
+            .map(|metadata| metadata.len() > 0)
+            .unwrap_or(false);
+    if !usable {
+        let _ = std::fs::remove_file(&temporary);
+        log_conversion_failure(app, stderr.len());
+        emit(app, index, total, "failed", "FFmpeg did not produce a playable MP4. The original file was kept.");
+        return false;
+    }
+    let verified = match probe_tv_streams(tools, &temporary, cancel) {
+        Ok(verified) => verified,
+        Err(FfmpegFailure::Cancelled) => {
+            let _ = std::fs::remove_file(&temporary);
+            emit(app, index, total, "cancelled", "Download cancelled");
+            return false;
+        }
+        Err(_) => {
+            let _ = std::fs::remove_file(&temporary);
+            log_conversion_failure(app, stderr.len());
+            emit(app, index, total, "failed", "The converted file could not be verified. The original file was kept.");
+            return false;
+        }
+    };
+    if !verified.tv_ready() {
+        let _ = std::fs::remove_file(&temporary);
+        log_conversion_failure(app, stderr.len());
+        emit(app, index, total, "failed", "FFmpeg produced a file this receiver may not play. The original file was kept.");
+        return false;
+    }
+    if std::fs::rename(path, &backup).is_err() {
+        let _ = std::fs::remove_file(&temporary);
+        emit(app, index, total, "failed", "The converted MP4 could not replace the download. The original file was kept.");
+        return false;
+    }
+    if std::fs::rename(&temporary, path).is_err() {
+        let _ = std::fs::rename(&backup, path);
+        let _ = std::fs::remove_file(&temporary);
+        emit(app, index, total, "failed", "The converted MP4 could not replace the download. The original file was kept.");
+        return false;
+    }
+    let _ = std::fs::remove_file(&backup);
+    emit(app, index, total, "converting", "TV-friendly MP4 ready");
+    true
+}
+
 fn now_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -454,7 +755,7 @@ fn emit(app: &AppHandle, index: usize, total: usize, phase: &'static str, detail
         phase,
         percent: match phase {
             "complete" => Some(100),
-            "downloading" | "merging" => None,
+            "downloading" | "merging" | "converting" => None,
             _ => Some(0),
         },
         detail: detail.to_string(),
@@ -470,7 +771,13 @@ fn configure_command(command: &mut Command) {
     }
 }
 
-fn build_command(tools: &DownloaderTools, directory: &Path, url: &str, hd: bool) -> Command {
+fn build_command(
+    tools: &DownloaderTools,
+    directory: &Path,
+    url: &str,
+    hd: bool,
+    tv_compatible: bool,
+) -> Command {
     let template = directory
         .join("%(title).150B [%(id)s].%(ext)s")
         .to_string_lossy()
@@ -483,8 +790,13 @@ fn build_command(tools: &DownloaderTools, directory: &Path, url: &str, hd: bool)
         .arg("--format")
         .arg(if hd { HD_FORMAT } else { SD_FORMAT })
         .arg("--output")
-        .arg(template)
-        .arg(url);
+        .arg(template);
+    if tv_compatible {
+        // Captured in Rust only. These absolute paths are never emitted; they
+        // let the converter verify the exact files yt-dlp finished.
+        command.arg("--print").arg("after_move:filepath");
+    }
+    command.arg(url);
     if hd {
         command
             .arg("--merge-output-format")
@@ -503,6 +815,7 @@ fn run_downloads(
     urls: Vec<String>,
     tools: DownloaderTools,
     hd: bool,
+    tv_compatible: bool,
     cancel: Arc<AtomicBool>,
     active: Arc<Mutex<Option<Arc<AtomicBool>>>>,
 ) {
@@ -518,7 +831,8 @@ fn run_downloads(
         emit(&app, index, total, "starting", "Starting download");
         let started_millis = now_millis();
         let last_activity = Arc::new(AtomicU64::new(0));
-        let mut child = match build_command(&tools, &directory, url, hd).spawn() {
+        let output_paths: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
+        let mut child = match build_command(&tools, &directory, url, hd, tv_compatible).spawn() {
             Ok(child) => child,
             Err(_) => {
                 emit(&app, index, total, "failed", "Could not start yt-dlp");
@@ -534,12 +848,21 @@ fn run_downloads(
             let activity = Arc::clone(&last_activity);
             let failure_hint_ref = Arc::clone(&failure);
             let log_app = app.clone();
+            let captured_paths = Arc::clone(&output_paths);
             std::thread::spawn(move || {
                 let mut logged_unmapped = false;
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                     activity.store(now_millis(), Ordering::Relaxed);
                     if progress_cancel.load(Ordering::Relaxed) {
                         break;
+                    }
+                    if tv_compatible {
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() && Path::new(trimmed).is_file() {
+                            if let Ok(mut paths) = captured_paths.lock() {
+                                paths.push(PathBuf::from(trimmed));
+                            }
+                        }
                     }
                     if let Some(hint) = failure_hint(&line) {
                         if let Ok(mut slot) = failure_hint_ref.lock() {
@@ -621,6 +944,21 @@ fn run_downloads(
             emit(&app, index, total, "failed", &detail);
             return;
         }
+        if tv_compatible {
+            let downloaded = output_paths
+                .lock()
+                .map(|paths| paths.clone())
+                .unwrap_or_default();
+            if downloaded.is_empty() {
+                emit(&app, index, total, "failed", "The download finished but its file could not be checked for TV compatibility. Try again.");
+                return;
+            }
+            for path in downloaded {
+                if !convert_to_tv_format(&app, &tools, &path, index, total, &cancel) {
+                    return;
+                }
+            }
+        }
         emit(&app, index, total, "complete", "Download finished");
     }
 }
@@ -643,12 +981,13 @@ pub async fn start_download(
     directory: String,
     urls: Vec<String>,
     hd: bool,
+    tv_compatible: bool,
 ) -> Result<(), String> {
     let tools = current_tools(&app).await;
     if !tools.yt_dlp_ready {
         return Err("yt-dlp is missing or not working. Install it with WinGet and try again.".to_string());
     }
-    if hd && !tools.ffmpeg_ready {
+    if (hd || tv_compatible) && !tools.ffmpeg_ready {
         return Err("FFmpeg is missing or not working. Install it with WinGet and try again.".to_string());
     }
     let directory = crate::canonicalize_media_path(Path::new(&directory))
@@ -666,7 +1005,7 @@ pub async fn start_download(
     let cancel = state.try_start()?;
     let active = Arc::clone(&state.0);
     tauri::async_runtime::spawn_blocking(move || {
-        run_downloads(app, directory, urls, tools, hd, cancel, active)
+        run_downloads(app, directory, urls, tools, hd, tv_compatible, cancel, active)
     });
     Ok(())
 }
@@ -824,6 +1163,60 @@ mod tests {
         assert!(progress_line("[download] Destination: F:\\Videos\\clip.mp4", 0, 2).is_none());
         let merging = progress_line("[Merger] Merging formats into \"clip.mp4\"", 0, 2).unwrap();
         assert_eq!(merging.phase, "merging");
+    }
+
+    #[test]
+    fn stream_probe_accepts_only_h264_with_aac_or_no_audio() {
+        let ready = parse_stream_probe(
+            "Stream #0:0: Video: h264 (High), yuv420p\nStream #0:1: Audio: aac (LC)",
+        );
+        assert!(ready.tv_ready());
+        let silent = parse_stream_probe("Stream #0:0: Video: h264 (High), yuv420p");
+        assert!(silent.tv_ready());
+        let av1 = parse_stream_probe(
+            "Stream #0:0: Video: av01 (Main)\nStream #0:1: Audio: opus",
+        );
+        assert!(!av1.tv_ready());
+        let vp9 = parse_stream_probe(
+            "Stream #0:0: Video: vp9\nStream #0:1: Audio: aac (LC)",
+        );
+        assert!(!vp9.tv_ready());
+    }
+
+    #[test]
+    fn tv_conversion_forces_h264_aac_and_faststart() {
+        let args = tv_conversion_args(Path::new("clip.webm"), Path::new("clip.mp4"))
+            .into_iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(args.contains("-c:v libx264"));
+        assert!(args.contains("-c:a aac"));
+        assert!(args.contains("-pix_fmt yuv420p"));
+        assert!(args.contains("-movflags +faststart"));
+        assert!(args.contains("-progress pipe:1"));
+    }
+
+    #[test]
+    fn tv_mode_captures_finished_paths_but_progress_never_emits_them() {
+        let mut tools = fake_tools(true, true);
+        tools.yt_dlp_path = Some(PathBuf::from("yt-dlp.exe"));
+        tools.ffmpeg_path = Some(PathBuf::from("ffmpeg.exe"));
+        let command = build_command(
+            &tools,
+            Path::new("F:\\Videos"),
+            "https://youtu.be/video-id",
+            false,
+            true,
+        );
+        let args = command
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--print" && pair[1] == "after_move:filepath"));
+        assert!(progress_line("[download] Destination: F:\\Videos\\clip.mp4", 0, 1).is_none());
     }
 
     fn fake_tools(found: bool, ready: bool) -> DownloaderTools {

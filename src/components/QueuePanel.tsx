@@ -5,7 +5,7 @@ import {
   Shuffle, SkipBack, SkipForward, Trash2, X,
 } from 'lucide-react'
 import {
-  clearWatchHistory, formatDuration, isPlaylistAvailable,
+  clearWatchHistory, formatDuration, hasPlayableQueueEntry, isPlaylistAvailable,
   playNext as commandNext, playNow, playPrevious,
   queueAdd, queueClear, queueRemove, queueReorder, recoverPlayback,
   setPlaybackMode, setRepeat, setShuffle, totalDuration,
@@ -85,6 +85,11 @@ export default function QueuePanel({
 
   const queueDuration = useMemo(() => totalDuration(snapshot?.queue ?? []), [snapshot?.queue])
   const canControl = available && castConnected && !!snapshot?.current_entry_id
+  const canNext = available && castConnected && !!snapshot && hasPlayableQueueEntry(snapshot) && (
+    !!snapshot.next_entry_id
+    || snapshot.repeat === 'all'
+    || !snapshot.current_entry_id
+  )
 
   async function clearHistory() {
     if (!snapshot?.history.length) return
@@ -275,7 +280,7 @@ export default function QueuePanel({
       <div className="queue-player-hints">
         <button onClick={onTogglePlay} disabled={!canControl}><span>{isPlaying ? <Pause size={15} /> : <Play size={15} />}</span> {isPlaying ? 'Pause' : 'Play'}</button>
         <button onClick={() => void guard(async () => playPrevious())} disabled={!canControl}><SkipBack size={15} /> Previous</button>
-        <button onClick={() => void guard(async () => commandNext())} disabled={!canControl}><SkipForward size={15} /> Next</button>
+        <button onClick={() => void guard(async () => commandNext())} disabled={!canNext} title={canNext ? 'Next video' : 'End of queue'}><SkipForward size={15} /> Next</button>
         <small>Previous restarts the current video after {snapshot?.previous_restart_threshold_seconds ?? 30}s. With Shuffle on, it follows actual play history.</small>
       </div>
       {!available && <div className="queue-error"><AlertCircle size={15} />Queue controls require the installed Windows desktop app.</div>}
