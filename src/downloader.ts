@@ -12,6 +12,9 @@ export type DownloaderTools = {
 
 export type DownloadPhase = 'starting' | 'downloading' | 'merging' | 'converting' | 'complete' | 'cancelled' | 'skipped' | 'failed'
 
+/** Maximum resolution requested from yt-dlp. Standard stays a single progressive MP4. */
+export type DownloadQuality = 'standard' | '720p' | '1080p' | '4k'
+
 export type DownloadProgress = {
   index: number
   total: number
@@ -40,7 +43,7 @@ export const installToolsWinget = (installYtDlp: boolean, installFfmpeg: boolean
 export type DownloadRequest = {
   directory: string
   urls: string[]
-  hd: boolean
+  quality: DownloadQuality
   tvCompatible: boolean
   /** Original playlist positions for a retry/skip batch; omitted for a new batch. */
   indices?: number[]

@@ -2,6 +2,16 @@
 
 All notable changes to RollaPlay are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.5] - 2026-11-27
+
+### Added
+
+- Downloader now has a **Maximum quality** selector: **Standard**, **720p max**, **1080p max** and **4K max**. Higher tiers pass real yt-dlp height caps so downloads stay at or below the selected resolution, and Retry/Skip keep the chosen quality for the original batch.
+
+### Changed
+
+- The default Downloader quality is now **1080p max** instead of the previous uncapped HD selection, so 4K files are only downloaded when explicitly chosen.
+
 ## [0.4.4] - 2026-11-27
 
 ### Added

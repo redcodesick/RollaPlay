@@ -6,7 +6,7 @@ import { getMediaDirectories, isDesktopApp, type MediaDirectory, type ScanResult
 import { debugLog, diagnosticError, friendlyError, invokeTracked } from '../diagnostics'
 import {
   cancelDownload, getDownloaderTools, installToolsWinget, onDownloadProgress, onToolInstallProgress,
-  prepareTools, startDownload, type DownloadProgress, type DownloaderTools,
+  prepareTools, startDownload, type DownloadProgress, type DownloaderTools, type DownloadQuality,
 } from '../downloader'
 import {
   clampedPercent, downloadsReadyToIndex, phaseLabel, progressCounter, progressIdentity,
@@ -16,7 +16,7 @@ import {
 type DownloadBatch = {
   folder: string
   urls: string[]
-  hd: boolean
+  quality: DownloadQuality
   tvCompatible: boolean
   total: number
 }
@@ -26,7 +26,7 @@ type DownloadBatch = {
 const storedUi = {
   folder: '',
   linksText: '',
-  hd: true,
+  quality: '1080p' as DownloadQuality,
   tvCompatible: false,
   installYtDlp: true,
   installFfmpeg: true,
@@ -48,7 +48,7 @@ export default function Downloader() {
   const isDesktop = isDesktopApp()
   const [folder, setFolder] = useState(storedUi.folder)
   const [linksText, setLinksText] = useState(storedUi.linksText)
-  const [hd, setHd] = useState(storedUi.hd)
+  const [quality, setQuality] = useState<DownloadQuality>(storedUi.quality)
   const [tvCompatible, setTvCompatible] = useState(storedUi.tvCompatible)
   const [installYtDlp, setInstallYtDlp] = useState(storedUi.installYtDlp)
   const [installFfmpeg, setInstallFfmpeg] = useState(storedUi.installFfmpeg)
@@ -70,7 +70,7 @@ export default function Downloader() {
   useEffect(() => {
     storedUi.folder = folder
     storedUi.linksText = linksText
-    storedUi.hd = hd
+    storedUi.quality = quality
     storedUi.tvCompatible = tvCompatible
     storedUi.installYtDlp = installYtDlp
     storedUi.installFfmpeg = installFfmpeg
@@ -87,7 +87,7 @@ export default function Downloader() {
     storedUi.indexed = indexedRef.current
     progressRef.current = progress
     batchRef.current = batch
-  }, [folder, linksText, hd, tvCompatible, installYtDlp, installFfmpeg, tools, busy, preparing, installDetail, installStep, installTotal, progress, batch, error, notice])
+  }, [folder, linksText, quality, tvCompatible, installYtDlp, installFfmpeg, tools, busy, preparing, installDetail, installStep, installTotal, progress, batch, error, notice])
 
   const addToLibrary = useCallback(async (directoryPath: string) => {
     if (indexedRef.current || !directoryPath) return
@@ -177,18 +177,18 @@ export default function Downloader() {
     setInstallDetail('')
     setInstallStep(0)
     setInstallTotal(1)
-    const wantFfmpeg = hd || tvCompatible
+    const wantFfmpeg = quality !== 'standard' || tvCompatible
     try {
       const result = await prepareTools(wantFfmpeg)
       setTools(result)
       setNotice(result.yt_dlp_ready && (!wantFfmpeg || result.ffmpeg_ready) ? 'yt-dlp and FFmpeg responded to their version checks.' : 'yt-dlp is ready for standard downloads.')
     } catch (prepareError) {
-      diagnosticError('downloader', 'tools_prepare_failed', prepareError, { hd, tvCompatible })
+      diagnosticError('downloader', 'tools_prepare_failed', prepareError, { quality, tvCompatible })
       setError(friendlyError(prepareError))
     } finally {
       setPreparing(false)
     }
-  }, [hd, tvCompatible])
+  }, [quality, tvCompatible])
 
   const installWithWinget = useCallback(async () => {
     setPreparing(true)
@@ -219,7 +219,7 @@ export default function Downloader() {
       // user with the buttons in this view before a download can start.
       const current = await getDownloaderTools()
       setTools(current)
-      const wantFfmpeg = currentBatch.hd || currentBatch.tvCompatible
+      const wantFfmpeg = currentBatch.quality !== 'standard' || currentBatch.tvCompatible
       const missing: string[] = []
       if (!current.yt_dlp_ready) missing.push('yt-dlp')
       if (wantFfmpeg && !current.ffmpeg_ready) missing.push('FFmpeg')
@@ -233,7 +233,7 @@ export default function Downloader() {
       await startDownload({
         directory: currentBatch.folder,
         urls: indices.map((index) => currentBatch.urls[index]),
-        hd: currentBatch.hd,
+        quality: currentBatch.quality,
         tvCompatible: currentBatch.tvCompatible,
         indices,
         total: currentBatch.total,
@@ -247,7 +247,7 @@ export default function Downloader() {
     const urls = linksText.split(/[\r\n]+/).map((line) => line.trim()).filter(Boolean)
     if (!folder) { setError('Choose a download folder first.'); return }
     if (!urls.length) { setError('Paste at least one YouTube video or playlist link.'); return }
-    const nextBatch: DownloadBatch = { folder, urls, hd, tvCompatible, total: urls.length }
+    const nextBatch: DownloadBatch = { folder, urls, quality, tvCompatible, total: urls.length }
     setBatch(nextBatch)
     batchRef.current = nextBatch
     indexedRef.current = false
@@ -257,12 +257,12 @@ export default function Downloader() {
     try {
       await launchBatch(nextBatch, urls.map((_, index) => index))
     } catch (downloadError) {
-      diagnosticError('downloader', 'download_start_failed', downloadError, { hd, tvCompatible, linkCount: urls.length })
+      diagnosticError('downloader', 'download_start_failed', downloadError, { quality, tvCompatible, linkCount: urls.length })
       setBusy(false)
       setNotice('')
       setError(friendlyError(downloadError))
     }
-  }, [folder, hd, tvCompatible, linksText, launchBatch])
+  }, [folder, quality, tvCompatible, linksText, launchBatch])
 
   const retryAt = useCallback(async (index: number) => {
     const currentBatch = batchRef.current
@@ -277,6 +277,8 @@ export default function Downloader() {
     const marked = { ...progressRef.current, [index]: retrying }
     progressRef.current = marked
     setProgress(marked)
+    // A skipped row may have been indexed already; retrying it must rescan.
+    indexedRef.current = false
     try {
       await launchBatch(currentBatch, indices)
     } catch (retryError) {
@@ -337,7 +339,7 @@ export default function Downloader() {
     return <section className="section-page downloader-page"><h1>YouTube downloader</h1><p>This feature works in the installed Windows app.</p></section>
   }
 
-  const needsTools = !tools?.yt_dlp_ready || ((hd || tvCompatible) && !tools?.ffmpeg_ready)
+  const needsTools = !tools?.yt_dlp_ready || ((quality !== 'standard' || tvCompatible) && !tools?.ffmpeg_ready)
   const toolLabel = (found?: boolean, ready?: boolean) => ready ? 'ready' : found ? 'not responding' : 'not installed'
   const toolClass = (ready?: boolean, found?: boolean) => ready ? 'ok' : found ? 'warn' : ''
   const orderedProgress = Object.values(progress).sort((a, b) => a.index - b.index)
@@ -372,24 +374,32 @@ export default function Downloader() {
             disabled={busy}
           />
 
-          <div className="download-quality-note">
-            <div><strong>Standard</strong><span>Single-file MP4 · fastest, widest receiver support</span></div>
-            <div><strong>HD</strong><span>H.264 video + AAC audio merged into MP4 · needs FFmpeg</span></div>
-            <div><strong>TV-friendly</strong><span>Verifies real codecs and converts unsupported files to H.264/AAC MP4</span></div>
-          </div>
-
-          <label className="download-check">
-            <input
-              type="checkbox"
-              checked={hd}
+          <div className="download-quality-picker">
+            <label className="download-label" htmlFor="download-quality">Maximum quality</label>
+            <select
+              id="download-quality"
+              className="download-quality-select"
+              value={quality}
               onChange={(event) => {
-                setHd(event.target.checked)
-                if (event.target.checked) setInstallFfmpeg(true)
+                setQuality(event.target.value as DownloadQuality)
+                if (event.target.value !== 'standard') setInstallFfmpeg(true)
               }}
               disabled={busy}
-            />
-            <span><strong>HD quality · H.264/AAC MP4</strong><small>Uses FFmpeg to combine 720p/1080p AVC with AAC. Install it below or fetch it from GitHub.</small></span>
-          </label>
+            >
+              <option value="standard">Standard — single-file MP4 · no FFmpeg</option>
+              <option value="720p">720p max — merged video + audio · needs FFmpeg</option>
+              <option value="1080p">1080p max — merged video + audio · needs FFmpeg</option>
+              <option value="4k">4K max — merged video + audio · needs FFmpeg</option>
+            </select>
+            <small>Quality is a maximum: RollaPlay picks the best real format at or below it. 4K sources often use AV1/VP9; tick TV-friendly for older receivers.</small>
+          </div>
+
+          <div className="download-quality-note">
+            <div><strong>Standard</strong><span>Single-file MP4 · fastest, widest receiver support</span></div>
+            <div><strong>720p / 1080p</strong><span>H.264/AAC when YouTube offers it · much smaller than 4K</span></div>
+            <div><strong>4K max</strong><span>Best format up to 2160p · TV-friendly converts AV1/VP9 when needed</span></div>
+            <div><strong>TV-friendly</strong><span>Verifies real codecs and converts unsupported files to H.264/AAC MP4</span></div>
+          </div>
 
           <label className="download-check">
             <input

@@ -1,11 +1,12 @@
 //! YouTube downloader for Cast-friendly media.
 //!
-//! The Downloader fetches a progressive H.264/AAC MP4 by default. HD quality
-//! merges separate AVC/AAC streams with FFmpeg. The opt-in TV-compatible mode
-//! checks the real streams and re-encodes only unsupported files to H.264/AAC
-//! MP4, replacing the original after the result is verified. Tools are never
-//! bundled: they are installed only when the user presses an install button,
-//! into app-local data from their official GitHub releases or with WinGet.
+//! The Downloader fetches a progressive H.264/AAC MP4 at Standard quality.
+//! Higher quality tiers cap the real yt-dlp height at 720p, 1080p or 4K and
+//! merge separate video/audio streams with FFmpeg. The opt-in TV-compatible
+//! mode checks the real streams and re-encodes only unsupported files to
+//! H.264/AAC MP4, replacing the original after the result is verified. Tools
+//! are never bundled: they are installed only when the user presses an install
+//! button, into app-local data from their official GitHub releases or WinGet.
 //! Discovery always prefers that app-local
 //! copy so a stale WinGet folder cannot shadow a known-good tool. Whole
 //! playlists are downloaded into the folder chosen in the UI. The child process
@@ -30,7 +31,12 @@ use url::Url;
 const PROGRESS_EVENT: &str = "download-progress";
 const INSTALL_EVENT: &str = "ffmpeg-install-progress";
 const SD_FORMAT: &str = "best[ext=mp4][acodec!=none][vcodec!=none]/18";
-const HD_FORMAT: &str = "bv*[vcodec^=avc]+ba[acodec^=mp4a]/b[ext=mp4]/b";
+// Each tier is a maximum, never a target: yt-dlp selects the best real format
+// at or below that height. The final fallback keeps the ceiling intact so a
+// 720p choice cannot silently become 1080p or 4K.
+const HD_720_FORMAT: &str = "bv*[vcodec^=avc][height<=720]+ba[acodec^=mp4a]/bv*[height<=720]+ba[acodec^=mp4a]/bv*[height<=720]+ba/b[ext=mp4][height<=720][vcodec!=none][acodec!=none]/b[height<=720][vcodec!=none][acodec!=none]";
+const HD_1080_FORMAT: &str = "bv*[vcodec^=avc][height<=1080]+ba[acodec^=mp4a]/bv*[height<=1080]+ba[acodec^=mp4a]/bv*[height<=1080]+ba/b[ext=mp4][height<=1080][vcodec!=none][acodec!=none]/b[height<=1080][vcodec!=none][acodec!=none]";
+const HD_2160_FORMAT: &str = "bv*[vcodec^=avc][height<=2160]+ba[acodec^=mp4a]/bv*[height<=2160]+ba[acodec^=mp4a]/bv*[height<=2160]+ba/b[ext=mp4][height<=2160][vcodec!=none][acodec!=none]/b[height<=2160][vcodec!=none][acodec!=none]";
 const POLL_INTERVAL: Duration = Duration::from_millis(120);
 const STALL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CONVERSION_STALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -42,6 +48,39 @@ const WINGET_SCRIPT: &str = include_str!("../../scripts/install-downloader-tools
 /// is transferring. The title is sanitized before it is ever emitted.
 const PROGRESS_TEMPLATE: &str = "download:[download] %(progress._default_template)s | %(info.title)s";
 const PROGRESS_TITLE_SEPARATOR: &str = " | ";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DownloadQuality {
+    Standard,
+    Hd720,
+    Hd1080,
+    Hd2160,
+}
+
+impl DownloadQuality {
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "standard" => Ok(Self::Standard),
+            "720p" => Ok(Self::Hd720),
+            "1080p" => Ok(Self::Hd1080),
+            "4k" => Ok(Self::Hd2160),
+            _ => Err("Choose a supported download quality".to_string()),
+        }
+    }
+
+    fn needs_ffmpeg(self) -> bool {
+        !matches!(self, Self::Standard)
+    }
+
+    fn format(self) -> &'static str {
+        match self {
+            Self::Standard => SD_FORMAT,
+            Self::Hd720 => HD_720_FORMAT,
+            Self::Hd1080 => HD_1080_FORMAT,
+            Self::Hd2160 => HD_2160_FORMAT,
+        }
+    }
+}
 
 #[derive(Clone, Serialize)]
 pub struct DownloaderTools {
@@ -302,7 +341,7 @@ fn tool_hint(tools: &DownloaderTools) -> String {
         if tools.ffmpeg_found {
             "FFmpeg was found but did not respond to a version check. Reinstall it with WinGet, refresh it from GitHub, or use standard quality.".to_string()
         } else {
-            "HD quality needs a working FFmpeg. Tick HD and install it with WinGet, or use standard quality.".to_string()
+            "720p, 1080p and 4K downloads need a working FFmpeg. Install it with WinGet, or use standard quality.".to_string()
         }
     } else {
         String::new()
@@ -468,7 +507,7 @@ fn failure_hint(line: &str) -> Option<&'static str> {
     } else if lower.contains("http error 403") || lower.contains("forbidden") {
         Some("YouTube refused the download. Try again later or refresh yt-dlp with Prepare from GitHub.")
     } else if lower.contains("requested format") || lower.contains("format is not available") {
-        Some("No Cast-friendly format was offered for this video. Try standard quality or another public link.")
+        Some("No download format was offered at this quality. Try a lower quality or another public link.")
     } else if lower.contains("http error") || lower.contains("http 5") {
         Some("YouTube returned an HTTP error. Try again later.")
     } else {
@@ -850,7 +889,7 @@ fn build_command(
     tools: &DownloaderTools,
     directory: &Path,
     url: &str,
-    hd: bool,
+    quality: DownloadQuality,
     tv_compatible: bool,
 ) -> Command {
     let template = directory
@@ -868,7 +907,7 @@ fn build_command(
         .arg(PROGRESS_TEMPLATE)
         .arg("--yes-playlist")
         .arg("--format")
-        .arg(if hd { HD_FORMAT } else { SD_FORMAT })
+        .arg(quality.format())
         .arg("--output")
         .arg(template);
     if tv_compatible {
@@ -877,12 +916,12 @@ fn build_command(
         command.arg("--print").arg("after_move:filepath");
     }
     command.arg(url);
-    if hd {
+    if quality.needs_ffmpeg() {
         command
             .arg("--merge-output-format")
             .arg("mp4")
             .arg("--ffmpeg-location")
-            .arg(tools.ffmpeg_path.clone().expect("FFmpeg checked before HD download"));
+            .arg(tools.ffmpeg_path.clone().expect("FFmpeg checked before quality download"));
     }
     command.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
     configure_command(&mut command);
@@ -921,7 +960,7 @@ fn run_downloads(
     directory: PathBuf,
     urls: Vec<String>,
     tools: DownloaderTools,
-    hd: bool,
+    quality: DownloadQuality,
     tv_compatible: bool,
     indices: Vec<usize>,
     total: usize,
@@ -943,7 +982,7 @@ fn run_downloads(
         let started_millis = now_millis();
         let last_activity = Arc::new(AtomicU64::new(0));
         let output_paths: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
-        let mut child = match build_command(&tools, &directory, url, hd, tv_compatible).spawn() {
+        let mut child = match build_command(&tools, &directory, url, quality, tv_compatible).spawn() {
             Ok(child) => child,
             Err(_) => {
                 emit(&app, index, total, "failed", title_text(&item_title), "Could not start yt-dlp");
@@ -1109,16 +1148,17 @@ pub async fn start_download(
     state: State<'_, DownloadState>,
     directory: String,
     urls: Vec<String>,
-    hd: bool,
+    quality: String,
     tv_compatible: bool,
     indices: Option<Vec<usize>>,
     total: Option<usize>,
 ) -> Result<(), String> {
+    let quality = DownloadQuality::parse(&quality)?;
     let tools = current_tools(&app).await;
     if !tools.yt_dlp_ready {
         return Err("yt-dlp is missing or not working. Install it with WinGet and try again.".to_string());
     }
-    if (hd || tv_compatible) && !tools.ffmpeg_ready {
+    if (quality.needs_ffmpeg() || tv_compatible) && !tools.ffmpeg_ready {
         return Err("FFmpeg is missing or not working. Install it with WinGet and try again.".to_string());
     }
     let directory = crate::canonicalize_media_path(Path::new(&directory))
@@ -1137,7 +1177,7 @@ pub async fn start_download(
     let cancel = state.try_start()?;
     let active = Arc::clone(&state.0);
     tauri::async_runtime::spawn_blocking(move || {
-        run_downloads(app, directory, urls, tools, hd, tv_compatible, indices, total, cancel, active)
+        run_downloads(app, directory, urls, tools, quality, tv_compatible, indices, total, cancel, active)
     });
     Ok(())
 }
@@ -1468,7 +1508,7 @@ mod tests {
             &tools,
             Path::new("F:\\Videos"),
             "https://youtu.be/video-id",
-            false,
+            DownloadQuality::Standard,
             true,
         );
         let args = command
@@ -1498,6 +1538,43 @@ mod tests {
         assert!(download_plan(2, Some(vec![0, 4]), Some(4)).is_err());
         assert!(download_plan(2, Some(vec![1, 1]), Some(4)).is_err());
         assert!(download_plan(3, Some(vec![0, 1, 2]), Some(2)).is_err());
+    }
+
+    #[test]
+    fn download_quality_caps_the_real_format_selection() {
+        assert_eq!(DownloadQuality::parse("standard").unwrap(), DownloadQuality::Standard);
+        assert_eq!(DownloadQuality::parse(" 4K ").unwrap(), DownloadQuality::Hd2160);
+        assert!(DownloadQuality::parse("8k").is_err());
+        assert!(!DownloadQuality::Standard.needs_ffmpeg());
+        assert!(DownloadQuality::Hd720.needs_ffmpeg());
+        assert_eq!(DownloadQuality::Hd720.format(), HD_720_FORMAT);
+        assert!(HD_720_FORMAT.contains("height<=720"));
+        assert!(!HD_720_FORMAT.contains("height<=1080"));
+        assert!(HD_1080_FORMAT.contains("height<=1080"));
+        assert!(!HD_1080_FORMAT.contains("height<=2160"));
+        assert!(HD_2160_FORMAT.contains("height<=2160"));
+    }
+
+    #[test]
+    fn quality_command_merges_only_above_standard() {
+        let mut tools = fake_tools(true, true);
+        tools.yt_dlp_path = Some(PathBuf::from("yt-dlp.exe"));
+        tools.ffmpeg_path = Some(PathBuf::from("ffmpeg.exe"));
+        let args = |quality: DownloadQuality| {
+            build_command(&tools, Path::new("F:\\Videos"), "https://youtu.be/video-id", quality, false)
+                .get_args()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+
+        let standard = args(DownloadQuality::Standard);
+        assert!(standard.windows(2).any(|pair| pair[0] == "--format" && pair[1] == SD_FORMAT));
+        assert!(!standard.iter().any(|value| value == "--merge-output-format"));
+
+        let hd = args(DownloadQuality::Hd1080);
+        assert!(hd.windows(2).any(|pair| pair[0] == "--format" && pair[1] == HD_1080_FORMAT));
+        assert!(hd.windows(2).any(|pair| pair[0] == "--merge-output-format" && pair[1] == "mp4"));
+        assert!(hd.iter().any(|value| value == "--ffmpeg-location"));
     }
 
     fn fake_tools(found: bool, ready: bool) -> DownloaderTools {
