@@ -14,7 +14,7 @@ import QueuePanel from './components/QueuePanel'
 import { FolderList, useMediaFolders } from './components/LibraryFolders'
 import MediaPicker from './components/MediaPicker'
 import PlaylistManager from './components/PlaylistManager'
-import SoftwareUpdates from './components/SoftwareUpdates'
+import SoftwareUpdates, { useSoftwareUpdate, type SoftwareUpdateController } from './components/SoftwareUpdates'
 import PlayerBar from './components/PlayerBar'
 import { CastCheck, ChromeCheck, NetworkCheck } from './components/SetupChecks'
 import {
@@ -444,6 +444,7 @@ function SetupDialog({
 
 function AboutDialog({
   onClose, onOpenSetup, folderCount, videoCount, playlistCount, foldersLoading, videosLoading, playlistsLoading,
+  updateController,
 }: {
   onClose: () => void
   onOpenSetup: () => void
@@ -453,6 +454,7 @@ function AboutDialog({
   foldersLoading?: boolean
   videosLoading?: boolean
   playlistsLoading?: boolean
+  updateController: SoftwareUpdateController
 }) {
   const [info, setInfo] = useState({ name: 'RollaPlay', version: APP_VERSION, tauri: '—' })
   const dialogRef = useRef<HTMLElement | null>(null)
@@ -483,7 +485,7 @@ function AboutDialog({
           <div><dt>Indexed videos</dt><dd>{videosLoading ? '—' : videoCount}</dd></div>
           <div><dt>Saved playlists</dt><dd>{playlistsLoading ? '—' : playlistCount}</dd></div>
         </dl>
-        <SoftwareUpdates installedVersion={info.version} />
+        <SoftwareUpdates controller={updateController} />
         <div className="about-note"><ShieldCheck size={16} /><span>Metadata, playlists and settings stay on this device. Casting uses Google Chrome and your home network only.</span></div>
         <div className="setup-footer"><button className="button-text" onClick={onOpenSetup}>Open setup guide <span>→</span></button><button className="button-primary" onClick={onClose}>Done</button></div>
       </section>
@@ -578,6 +580,10 @@ function App() {
   const [playingOverride, setPlayingOverride] = useState<boolean | null>(null)
   const [volumePreview, setVolumePreview] = useState<number | null>(null)
   const [mutePreview, setMutePreview] = useState<boolean | null>(null)
+  // One updater for the session: a read-only check runs at startup, while
+  // downloading, installing and restarting always require explicit clicks.
+  const updateController = useSoftwareUpdate(APP_VERSION, true)
+  const [updateBannerDismissed, setUpdateBannerDismissed] = useState(false)
   const senderHostRef = useRef<HTMLDivElement | null>(null)
   const senderEmbeddedRef = useRef(false)
   const playlistReady = isPlaylistAvailable()
@@ -921,6 +927,20 @@ function App() {
             </div>
           </div>
         </header>
+        {updateController.state.phase === 'available' && !updateBannerDismissed && (
+          <div className="update-banner" role="status">
+            <span>Version {updateController.state.latestVersion} is available. Nothing is installed until you choose it.</span>
+            <button
+              className="button-text"
+              onClick={() => { setUpdateBannerDismissed(true); setAboutOpen(true) }}
+            >View update <span>→</span></button>
+            <button
+              className="update-banner-close"
+              onClick={() => setUpdateBannerDismissed(true)}
+              aria-label="Dismiss update notice"
+            ><X size={14} /></button>
+          </div>
+        )}
         {active === 'Settings' ? <SettingsView onManage={browse} onPlayback={() => setActive('Playlists')} onDownloader={() => setActive('Downloader')} onAbout={() => setAboutOpen(true)} />
           : active === 'Downloader' ? <Downloader />
           : active === 'Library' ? <MediaLibrary searchQuery={query} selectedMediaIds={selectedMediaIds} onSelectionChange={setSelectedMediaIds} />
@@ -1035,6 +1055,7 @@ function App() {
         foldersLoading={directoriesLoading}
         videosLoading={recentFilesLoading}
         playlistsLoading={playlistsLoading}
+        updateController={updateController}
       />}
       {exitConfirmOpen && <ExitConfirmDialog onCancel={() => setExitConfirmOpen(false)} onConfirm={() => void confirmExit()} />}
     </div>

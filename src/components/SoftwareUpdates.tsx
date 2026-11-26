@@ -11,6 +11,134 @@ import {
   updaterErrorKind, updateFailed, type NoteInline, type ParsedReleaseNotes, type UpdateViewState,
 } from '../updater'
 
+export type SoftwareUpdateController = {
+  state: UpdateViewState
+  checkForUpdates: () => void
+  downloadAndInstall: () => void
+  restartNow: () => void
+  retry: () => void
+}
+
+/**
+ * Owns the updater for the whole app so the startup check and the About panel
+ * share one result. Checking, downloading and installing are always explicit;
+ * the startup pass only reads the signed manifest and never changes the app.
+ */
+export function useSoftwareUpdate(
+  installedVersion: string,
+  checkOnStartup = false,
+): SoftwareUpdateController {
+  const [state, setState] = useState<UpdateViewState>(() => initialUpdateState(installedVersion))
+  const activeUpdate = useRef<Update | null>(null)
+  const mounted = useRef(true)
+  const busy = useRef(false)
+  const startupChecked = useRef(false)
+
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      const pending = activeUpdate.current
+      activeUpdate.current = null
+      if (pending) void pending.close().catch(() => {})
+    }
+  }, [])
+
+  const closeActiveUpdate = useCallback(async () => {
+    const pending = activeUpdate.current
+    activeUpdate.current = null
+    if (pending) await pending.close().catch(() => {})
+  }, [])
+
+  const checkForUpdates = useCallback(async () => {
+    if (!isDesktopApp() || busy.current) return
+    busy.current = true
+    const checkedAt = new Date().toISOString()
+    setState((current) => beginCheck(current))
+    try {
+      await closeActiveUpdate()
+      const update = await check({ timeout: 15000 })
+      if (!mounted.current) {
+        if (update) await update.close().catch(() => {})
+        return
+      }
+      if (!update) {
+        setState((current) => checkUpToDate(current, checkedAt))
+        return
+      }
+      if (compareVersions(update.version, installedVersion) <= 0) {
+        await update.close().catch(() => {})
+        setState((current) => checkUpToDate(current, checkedAt))
+        return
+      }
+      activeUpdate.current = update
+      setState((current) => checkAvailable(current, {
+        version: update.version,
+        date: update.date,
+        body: update.body,
+      }, checkedAt))
+    } catch (error) {
+      if (mounted.current) {
+        setState((current) => updateFailed({ ...current, lastCheckedAt: checkedAt }, error, 'check'))
+      }
+    } finally {
+      busy.current = false
+    }
+  }, [closeActiveUpdate, installedVersion])
+
+  useEffect(() => {
+    if (!checkOnStartup || startupChecked.current || !isDesktopApp()) return
+    startupChecked.current = true
+    void checkForUpdates()
+  }, [checkForUpdates, checkOnStartup])
+
+  const downloadAndInstall = useCallback(async () => {
+    const update = activeUpdate.current
+    if (!isDesktopApp() || !update || busy.current) return
+    busy.current = true
+    setState((current) => downloadStarted(current))
+    try {
+      await update.download((event) => {
+        if (!mounted.current) return
+        setState((current) => ({ ...current, progress: applyDownloadEvent(current.progress, event) }))
+      })
+      if (!mounted.current) return
+      setState((current) => downloadFinished(current))
+      await update.install({ restartAfterInstall: false })
+      if (mounted.current) setState((current) => installFinished(current))
+    } catch (error) {
+      if (!mounted.current) return
+      const retryAction = updaterErrorKind(error) === 'download' ? 'download' : 'check'
+      setState((current) => updateFailed(current, error, retryAction))
+    } finally {
+      busy.current = false
+    }
+  }, [])
+
+  const restartNow = useCallback(async () => {
+    if (!isDesktopApp() || busy.current) return
+    busy.current = true
+    try {
+      await relaunch()
+    } catch (error) {
+      if (mounted.current) setState((current) => restartFailed(current, error))
+    } finally {
+      busy.current = false
+    }
+  }, [])
+
+  const retry = useCallback(() => {
+    const next = retryUpdate(state)
+    setState(next)
+    if (next.error) return
+    if (next.phase === 'restartReady') void restartNow()
+    else if (next.phase === 'available') void downloadAndInstall()
+    else void checkForUpdates()
+  }, [checkForUpdates, downloadAndInstall, restartNow, state])
+
+  return { state, checkForUpdates, downloadAndInstall, restartNow, retry }
+}
+
 const statusLabels: Record<UpdateViewState['phase'], string> = {
   idle: 'Not checked yet',
   checking: 'Checking',
@@ -70,108 +198,8 @@ function ReleaseNotes({ notes }: { notes?: ParsedReleaseNotes }) {
   )
 }
 
-export default function SoftwareUpdates({ installedVersion }: { installedVersion: string }) {
-  const [state, setState] = useState<UpdateViewState>(() => initialUpdateState(installedVersion))
-  const activeUpdate = useRef<Update | null>(null)
-  const mounted = useRef(true)
-  const busy = useRef(false)
-
-  useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
-      const pending = activeUpdate.current
-      activeUpdate.current = null
-      if (pending) void pending.close().catch(() => {})
-    }
-  }, [])
-
-  const closeActiveUpdate = useCallback(async () => {
-    const pending = activeUpdate.current
-    activeUpdate.current = null
-    if (pending) await pending.close().catch(() => {})
-  }, [])
-
-  const runCheck = useCallback(async () => {
-    if (!isDesktopApp() || busy.current) return
-    busy.current = true
-    const checkedAt = new Date().toISOString()
-    setState((current) => beginCheck(current))
-    try {
-      await closeActiveUpdate()
-      const update = await check({ timeout: 15000 })
-      if (!mounted.current) {
-        if (update) await update.close().catch(() => {})
-        return
-      }
-      if (!update) {
-        setState((current) => checkUpToDate(current, checkedAt))
-        return
-      }
-      if (compareVersions(update.version, installedVersion) <= 0) {
-        await update.close().catch(() => {})
-        setState((current) => checkUpToDate(current, checkedAt))
-        return
-      }
-      activeUpdate.current = update
-      setState((current) => checkAvailable(current, {
-        version: update.version,
-        date: update.date,
-        body: update.body,
-      }, checkedAt))
-    } catch (error) {
-      if (mounted.current) {
-        setState((current) => updateFailed({ ...current, lastCheckedAt: checkedAt }, error, 'check'))
-      }
-    } finally {
-      busy.current = false
-    }
-  }, [closeActiveUpdate, installedVersion])
-
-  const downloadAndInstall = useCallback(async () => {
-    const update = activeUpdate.current
-    if (!isDesktopApp() || !update || busy.current) return
-    busy.current = true
-    setState((current) => downloadStarted(current))
-    try {
-      await update.download((event) => {
-        if (!mounted.current) return
-        setState((current) => ({ ...current, progress: applyDownloadEvent(current.progress, event) }))
-      })
-      if (!mounted.current) return
-      setState((current) => downloadFinished(current))
-      await update.install({ restartAfterInstall: false })
-      if (mounted.current) setState((current) => installFinished(current))
-    } catch (error) {
-      if (!mounted.current) return
-      const retryAction = updaterErrorKind(error) === 'download' ? 'download' : 'check'
-      setState((current) => updateFailed(current, error, retryAction))
-    } finally {
-      busy.current = false
-    }
-  }, [])
-
-  const restartNow = useCallback(async () => {
-    if (!isDesktopApp() || busy.current) return
-    busy.current = true
-    try {
-      await relaunch()
-    } catch (error) {
-      if (mounted.current) setState((current) => restartFailed(current, error))
-    } finally {
-      busy.current = false
-    }
-  }, [])
-
-  const retry = useCallback(() => {
-    const next = retryUpdate(state)
-    setState(next)
-    if (next.error) return
-    if (next.phase === 'restartReady') void restartNow()
-    else if (next.phase === 'available') void downloadAndInstall()
-    else void runCheck()
-  }, [downloadAndInstall, restartNow, runCheck, state])
-
+export default function SoftwareUpdates({ controller }: { controller: SoftwareUpdateController }) {
+  const { state, checkForUpdates, downloadAndInstall, restartNow, retry } = controller
   const showProgress = state.phase === 'downloading' || state.phase === 'installing' || state.phase === 'restartReady'
   const progressWidth = state.progress.percent !== undefined ? `${state.progress.percent}%` : '18%'
 
@@ -184,7 +212,7 @@ export default function SoftwareUpdates({ installedVersion }: { installedVersion
         </div>
         <button
           className="button-text"
-          onClick={() => void runCheck()}
+          onClick={() => void checkForUpdates()}
           disabled={!isDesktopApp() || !canCheckForUpdates(state)}
         >
           <RefreshCw size={14} className={state.phase === 'checking' ? 'update-spin' : undefined} />

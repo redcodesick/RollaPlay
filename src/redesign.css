@@ -3330,6 +3330,52 @@ summary:focus-visible {
   background: var(--surface-raised);
 }
 
+/* Startup update notice: the check is read-only; installing stays a click. */
+.update-banner {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 16px 28px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--orange);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.update-banner > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.update-banner .button-text {
+  flex: 0 0 auto;
+  color: var(--text);
+}
+
+.update-banner-close {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.update-banner-close:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
 .update-heading {
   display: flex;
   gap: 12px;

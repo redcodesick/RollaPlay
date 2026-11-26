@@ -2,10 +2,11 @@
 
 All notable changes to RollaPlay are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.4.2] - 2026-11-26
 
 ### Added
 
+- RollaPlay now checks for a signed stable release at startup. An available update is shown in the app with a link to its release notes; downloading, installing and restarting still require explicit clicks.
 - Tool installation now shows a real step-by-step progress bar for both WinGet and GitHub installs, with fixed milestone labels and no paths, URLs or raw script output.
 
 ### Changed
