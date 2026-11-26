@@ -2,6 +2,17 @@
 
 All notable changes to RollaPlay are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- Downloader status now shows the real transfer percentage, speed and sanitized video title while a download runs, including TV-friendly mode. TV-friendly mode explicitly requests yt-dlp progress because its `--print` output previously suppressed every progress line.
+- The status card now labels the real phase and keeps the link position for playlist items, so it no longer stays on "Starting download" while files are transferring.
+
+### Changed
+
+- TV-friendly conversion now uses H.264 `preset slow` with `CRF 26` instead of `veryfast`/`CRF 20`, producing smaller MP4 files while keeping H.264/AAC MP4, `+faststart`, real stream verification and original-until-success safety.
+
 ## [0.4.2] - 2026-11-26
 
 ### Added

@@ -37,6 +37,11 @@ const CONVERSION_STALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const TOOL_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const INSTALL_SCRIPT: &str = include_str!("../../scripts/install-downloader-tools.ps1");
 const WINGET_SCRIPT: &str = include_str!("../../scripts/install-downloader-tools-winget.ps1");
+/// `--print` makes yt-dlp quiet, which hides the normal progress lines. Ask
+/// for progress explicitly and append the real title so the UI can show what
+/// is transferring. The title is sanitized before it is ever emitted.
+const PROGRESS_TEMPLATE: &str = "download:[download] %(progress._default_template)s | %(info.title)s";
+const PROGRESS_TITLE_SEPARATOR: &str = " | ";
 
 #[derive(Clone, Serialize)]
 pub struct DownloaderTools {
@@ -61,6 +66,8 @@ pub struct DownloadProgress {
     pub total: usize,
     pub phase: &'static str,
     pub percent: Option<u8>,
+    /// Sanitized real title reported by yt-dlp; never a URL, path or id.
+    pub title: String,
     pub detail: String,
 }
 
@@ -364,6 +371,47 @@ fn percent_in(line: &str) -> Option<u8> {
     None
 }
 
+/// Keeps only a real, human-readable title. Anything that looks like a URL,
+/// path, credential or compact video/playlist id is dropped instead of being
+/// guessed at or echoed back.
+fn safe_title(raw: &str) -> Option<String> {
+    let flat = raw
+        .chars()
+        .filter(|character| !character.is_control())
+        .map(|character| if character.is_whitespace() { ' ' } else { character })
+        .collect::<String>();
+    let title = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+    if title.is_empty() || title.len() > 160 {
+        return None;
+    }
+    let lower = title.to_ascii_lowercase();
+    if lower.starts_with("http")
+        || lower.contains("://")
+        || lower.contains("token=")
+        || lower.contains("bearer")
+        || title.contains(":\\")
+        || title.contains("\\\\")
+        || title.starts_with('/')
+    {
+        return None;
+    }
+    let looks_like_id = title.split_whitespace().any(|token| {
+        let compact = token.trim_matches(|character: char| !character.is_ascii_alphanumeric() && character != '_' && character != '-');
+        compact.len() >= 10
+            && compact.chars().any(|character| character.is_ascii_digit())
+            && compact.chars().any(|character| character.is_ascii_alphabetic())
+    });
+    if looks_like_id {
+        return None;
+    }
+    Some(title.chars().take(120).collect())
+}
+
+fn title_in(line: &str) -> Option<String> {
+    let raw = line.rsplit_once(PROGRESS_TITLE_SEPARATOR)?.1.trim();
+    safe_title(raw)
+}
+
 fn progress_line(line: &str, index: usize, total: usize) -> Option<DownloadProgress> {
     if line.contains("[Merger]") || line.contains("Merging formats into") {
         return Some(DownloadProgress {
@@ -371,6 +419,7 @@ fn progress_line(line: &str, index: usize, total: usize) -> Option<DownloadProgr
             total,
             phase: "merging",
             percent: Some(100),
+            title: String::new(),
             detail: "Combining HD video and audio into MP4".to_string(),
         });
     }
@@ -379,13 +428,19 @@ fn progress_line(line: &str, index: usize, total: usize) -> Option<DownloadProgr
         return None;
     }
     let percent = percent_in(line)?;
+    let title = title_in(line).unwrap_or_default();
     let tail = line.splitn(2, '%').nth(1).unwrap_or("").trim();
-    let detail = if tail.is_empty() {
+    let stats = tail
+        .rsplit_once(PROGRESS_TITLE_SEPARATOR)
+        .map(|(before, _)| before.trim())
+        .unwrap_or(tail);
+    let stats = sanitize_error_line(stats);
+    let detail = if stats.is_empty() {
         format!("Downloading · {percent}%")
     } else {
-        format!("{percent}% · {}", tail.chars().take(72).collect::<String>())
+        format!("{percent}% · {stats}")
     };
-    Some(DownloadProgress { index, total, phase: "downloading", percent: Some(percent), detail })
+    Some(DownloadProgress { index, total, phase: "downloading", percent: Some(percent), title, detail })
 }
 
 /// Maps raw tool output to a fixed, safe message. Nothing from the tool is
@@ -595,10 +650,13 @@ fn tv_conversion_args(input: &Path, output: &Path) -> Vec<OsString> {
         OsString::from("-dn"),
         OsString::from("-c:v"),
         OsString::from("libx264"),
+        // Smaller TV-friendly files: H.264 needs a higher bitrate than the AV1/
+        // VP9 source to look similar, so use a slower preset and a size-focused
+        // CRF instead of the previous veryfast/high-quality setting.
         OsString::from("-preset"),
-        OsString::from("veryfast"),
+        OsString::from("slow"),
         OsString::from("-crf"),
-        OsString::from("20"),
+        OsString::from("26"),
         OsString::from("-pix_fmt"),
         OsString::from("yuv420p"),
         OsString::from("-c:a"),
@@ -648,20 +706,21 @@ fn convert_to_tv_format(
     index: usize,
     total: usize,
     cancel: &AtomicBool,
+    title: String,
 ) -> bool {
-    emit(app, index, total, "converting", "Checking video format");
+    emit(app, index, total, "converting", title.clone(), "Checking video format");
     let probe = match probe_tv_streams(tools, path, cancel) {
         Ok(probe) => probe,
         Err(FfmpegFailure::Cancelled) => {
-            emit(app, index, total, "cancelled", "Download cancelled");
+            emit(app, index, total, "cancelled", title.clone(), "Download cancelled");
             return false;
         }
         Err(FfmpegFailure::Stalled) => {
-            emit(app, index, total, "failed", "FFmpeg stopped responding during conversion. Reinstall it and try again.");
+            emit(app, index, total, "failed", title.clone(), "FFmpeg stopped responding during conversion. Reinstall it and try again.");
             return false;
         }
         Err(FfmpegFailure::Message(detail)) => {
-            emit(app, index, total, "failed", detail);
+            emit(app, index, total, "failed", title.clone(), detail);
             return false;
         }
     };
@@ -671,29 +730,29 @@ fn convert_to_tv_format(
         .map(|value| value.eq_ignore_ascii_case("mp4"))
         .unwrap_or(false);
     if probe.tv_ready() && already_mp4 {
-        emit(app, index, total, "converting", "Already TV-compatible; no conversion needed");
+        emit(app, index, total, "converting", title.clone(), "Already TV-compatible; no conversion needed");
         return true;
     }
 
-    emit(app, index, total, "converting", "Converting to TV-friendly H.264/AAC MP4");
+    emit(app, index, total, "converting", title.clone(), "Converting to TV-friendly H.264/AAC MP4");
     let stamp = now_millis();
     let (temporary, backup) = conversion_paths(path, stamp);
     let stderr = match run_ffmpeg(tools, tv_conversion_args(path, &temporary), cancel, &[0]) {
         Ok(stderr) => stderr,
         Err(FfmpegFailure::Cancelled) => {
             let _ = std::fs::remove_file(&temporary);
-            emit(app, index, total, "cancelled", "Download cancelled");
+            emit(app, index, total, "cancelled", title.clone(), "Download cancelled");
             return false;
         }
         Err(FfmpegFailure::Stalled) => {
             let _ = std::fs::remove_file(&temporary);
-            emit(app, index, total, "failed", "Conversion stalled with no output for ten minutes. Try a shorter video or a faster computer.");
+            emit(app, index, total, "failed", title.clone(), "Conversion stalled with no output for ten minutes. Try a shorter video or a faster computer.");
             return false;
         }
         Err(FfmpegFailure::Message(detail)) => {
             let _ = std::fs::remove_file(&temporary);
             log_conversion_failure(app, detail.len());
-            emit(app, index, total, "failed", detail);
+            emit(app, index, total, "failed", title.clone(), detail);
             return false;
         }
     };
@@ -705,42 +764,42 @@ fn convert_to_tv_format(
     if !usable {
         let _ = std::fs::remove_file(&temporary);
         log_conversion_failure(app, stderr.len());
-        emit(app, index, total, "failed", "FFmpeg did not produce a playable MP4. The original file was kept.");
+        emit(app, index, total, "failed", title.clone(), "FFmpeg did not produce a playable MP4. The original file was kept.");
         return false;
     }
     let verified = match probe_tv_streams(tools, &temporary, cancel) {
         Ok(verified) => verified,
         Err(FfmpegFailure::Cancelled) => {
             let _ = std::fs::remove_file(&temporary);
-            emit(app, index, total, "cancelled", "Download cancelled");
+            emit(app, index, total, "cancelled", title.clone(), "Download cancelled");
             return false;
         }
         Err(_) => {
             let _ = std::fs::remove_file(&temporary);
             log_conversion_failure(app, stderr.len());
-            emit(app, index, total, "failed", "The converted file could not be verified. The original file was kept.");
+            emit(app, index, total, "failed", title.clone(), "The converted file could not be verified. The original file was kept.");
             return false;
         }
     };
     if !verified.tv_ready() {
         let _ = std::fs::remove_file(&temporary);
         log_conversion_failure(app, stderr.len());
-        emit(app, index, total, "failed", "FFmpeg produced a file this receiver may not play. The original file was kept.");
+        emit(app, index, total, "failed", title.clone(), "FFmpeg produced a file this receiver may not play. The original file was kept.");
         return false;
     }
     if std::fs::rename(path, &backup).is_err() {
         let _ = std::fs::remove_file(&temporary);
-        emit(app, index, total, "failed", "The converted MP4 could not replace the download. The original file was kept.");
+        emit(app, index, total, "failed", title.clone(), "The converted MP4 could not replace the download. The original file was kept.");
         return false;
     }
     if std::fs::rename(&temporary, path).is_err() {
         let _ = std::fs::rename(&backup, path);
         let _ = std::fs::remove_file(&temporary);
-        emit(app, index, total, "failed", "The converted MP4 could not replace the download. The original file was kept.");
+        emit(app, index, total, "failed", title.clone(), "The converted MP4 could not replace the download. The original file was kept.");
         return false;
     }
     let _ = std::fs::remove_file(&backup);
-    emit(app, index, total, "converting", "TV-friendly MP4 ready");
+    emit(app, index, total, "converting", title.clone(), "TV-friendly MP4 ready");
     true
 }
 
@@ -762,14 +821,20 @@ fn displayed_percent(phase: &str) -> Option<u8> {
     }
 }
 
-fn emit(app: &AppHandle, index: usize, total: usize, phase: &'static str, detail: &str) {
+fn emit(app: &AppHandle, index: usize, total: usize, phase: &'static str, title: String, detail: &str) {
+    let detail = detail.to_string();
     let _ = app.emit(PROGRESS_EVENT, DownloadProgress {
         index,
         total,
         phase,
         percent: displayed_percent(phase),
-        detail: detail.to_string(),
+        title,
+        detail,
     });
+}
+
+fn title_text(slot: &Arc<Mutex<String>>) -> String {
+    slot.lock().map(|title| title.clone()).unwrap_or_default()
 }
 
 fn configure_command(command: &mut Command) {
@@ -796,6 +861,11 @@ fn build_command(
     command
         .arg("--no-warnings")
         .arg("--newline")
+        // `--print` makes yt-dlp quiet, so progress must be requested explicitly.
+        // The template appends the real title after the normal progress fields.
+        .arg("--progress")
+        .arg("--progress-template")
+        .arg(PROGRESS_TEMPLATE)
         .arg("--yes-playlist")
         .arg("--format")
         .arg(if hd { HD_FORMAT } else { SD_FORMAT })
@@ -834,18 +904,21 @@ fn run_downloads(
     let failure: Arc<Mutex<Option<&'static str>>> = Arc::new(Mutex::new(None));
 
     for (index, url) in urls.iter().enumerate() {
+        // The title arrives with the first real progress line. Keep it safe and
+        // reuse it for the remaining phases instead of re-reading tool output.
+        let item_title = Arc::new(Mutex::new(String::new()));
         if cancel.load(Ordering::Relaxed) {
-            emit(&app, index, total, "cancelled", "Download cancelled");
+            emit(&app, index, total, "cancelled", title_text(&item_title), "Download cancelled");
             return;
         }
-        emit(&app, index, total, "starting", "Starting download");
+        emit(&app, index, total, "starting", title_text(&item_title), "Starting download");
         let started_millis = now_millis();
         let last_activity = Arc::new(AtomicU64::new(0));
         let output_paths: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
         let mut child = match build_command(&tools, &directory, url, hd, tv_compatible).spawn() {
             Ok(child) => child,
             Err(_) => {
-                emit(&app, index, total, "failed", "Could not start yt-dlp");
+                emit(&app, index, total, "failed", title_text(&item_title), "Could not start yt-dlp");
                 return;
             }
         };
@@ -859,6 +932,7 @@ fn run_downloads(
             let failure_hint_ref = Arc::clone(&failure);
             let log_app = app.clone();
             let captured_paths = Arc::clone(&output_paths);
+            let title_slot = Arc::clone(&item_title);
             std::thread::spawn(move || {
                 let mut logged_unmapped = false;
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -885,6 +959,11 @@ fn run_downloads(
                         log_unmapped_error(&log_app, &line);
                     }
                     if let Some(update) = progress_line(&line, index, total) {
+                        if !update.title.is_empty() {
+                            if let Ok(mut slot) = title_slot.lock() {
+                                *slot = update.title.clone();
+                            }
+                        }
                         let _ = progress_app.emit(PROGRESS_EVENT, update);
                     }
                 }
@@ -895,6 +974,7 @@ fn run_downloads(
             let log_app = app.clone();
             let progress_app = app.clone();
             let activity = Arc::clone(&last_activity);
+            let title_slot = Arc::clone(&item_title);
             std::thread::spawn(move || {
                 let mut logged_unmapped = false;
                 for line in BufReader::new(stderr).lines().map_while(Result::ok) {
@@ -912,6 +992,11 @@ fn run_downloads(
                     // yt-dlp writes `[download] NN%` progress to stderr, so the
                     // status card only advances when this stream is parsed too.
                     if let Some(update) = progress_line(&line, index, total) {
+                        if !update.title.is_empty() {
+                            if let Ok(mut slot) = title_slot.lock() {
+                                *slot = update.title.clone();
+                            }
+                        }
                         let _ = progress_app.emit(PROGRESS_EVENT, update);
                     }
                 }
@@ -922,7 +1007,7 @@ fn run_downloads(
             if cancel.load(Ordering::Relaxed) {
                 let _ = child.kill();
                 let _ = child.wait();
-                emit(&app, index, total, "cancelled", "Download cancelled");
+                emit(&app, index, total, "cancelled", title_text(&item_title), "Download cancelled");
                 return;
             }
             if let Some(status) = child.try_wait().ok().flatten() {
@@ -933,7 +1018,7 @@ fn run_downloads(
             if now_millis().saturating_sub(reference) > STALL_TIMEOUT.as_millis() as u64 {
                 let _ = child.kill();
                 let _ = child.wait();
-                emit(&app, index, total, "failed", "Download stalled with no output for five minutes. Try a public link or standard quality.");
+                emit(&app, index, total, "failed", title_text(&item_title), "Download stalled with no output for five minutes. Try a public link or standard quality.");
                 return;
             }
             std::thread::sleep(POLL_INTERVAL);
@@ -957,7 +1042,7 @@ fn run_downloads(
                     "yt-dlp exited with code {}. Refresh it with Prepare from GitHub or WinGet, then retry.",
                     exit_code.unwrap_or(-1)
                 ));
-            emit(&app, index, total, "failed", &detail);
+            emit(&app, index, total, "failed", title_text(&item_title), &detail);
             return;
         }
         if tv_compatible {
@@ -966,16 +1051,16 @@ fn run_downloads(
                 .map(|paths| paths.clone())
                 .unwrap_or_default();
             if downloaded.is_empty() {
-                emit(&app, index, total, "failed", "The download finished but its file could not be checked for TV compatibility. Try again.");
+                emit(&app, index, total, "failed", title_text(&item_title), "The download finished but its file could not be checked for TV compatibility. Try again.");
                 return;
             }
             for path in downloaded {
-                if !convert_to_tv_format(&app, &tools, &path, index, total, &cancel) {
+                if !convert_to_tv_format(&app, &tools, &path, index, total, &cancel, title_text(&item_title)) {
                     return;
                 }
             }
         }
-        emit(&app, index, total, "complete", "Download finished");
+        emit(&app, index, total, "complete", title_text(&item_title), "Download finished");
     }
 }
 
@@ -1228,9 +1313,47 @@ mod tests {
         let update = progress_line("[download]  45.0% of ~ 15.70MiB at 1.20MiB/s ETA 00:12", 0, 2).unwrap();
         assert_eq!(update.percent, Some(45));
         assert_eq!(update.phase, "downloading");
+        assert!(update.title.is_empty());
         assert!(progress_line("[download] Destination: F:\\Videos\\clip.mp4", 0, 2).is_none());
         let merging = progress_line("[Merger] Merging formats into \"clip.mp4\"", 0, 2).unwrap();
         assert_eq!(merging.phase, "merging");
+    }
+
+    #[test]
+    fn progress_line_shows_real_title_and_stats_without_leaking_identifiers() {
+        let update = progress_line(
+            "[download]  45.0% of ~ 15.70MiB at 1.20MiB/s ETA 00:12 | RollaPlay Studio Clip",
+            1,
+            3,
+        )
+        .unwrap();
+        assert_eq!(update.index, 1);
+        assert_eq!(update.total, 3);
+        assert_eq!(update.percent, Some(45));
+        assert_eq!(update.title, "RollaPlay Studio Clip");
+        assert!(update.detail.contains("45%"));
+        assert!(update.detail.contains("1.20MiB/s"));
+        assert!(!update.detail.contains("RollaPlay"));
+
+        let suspicious = progress_line(
+            "[download]  45.0% of 8.10MiB at 1.02MiB/s ETA 00:06 | https://secret.test/watch?v=dQw4w9WgXcQ",
+            0,
+            1,
+        )
+        .unwrap();
+        assert!(suspicious.title.is_empty());
+        assert!(!suspicious.detail.contains("http"));
+        assert!(!suspicious.detail.contains("dQw4w9WgXcQ"));
+    }
+
+    #[test]
+    fn safe_title_drops_paths_tokens_and_compact_ids() {
+        assert_eq!(safe_title("  Rolla   Play — Studio Clip  "), Some("Rolla Play — Studio Clip".to_string()));
+        assert_eq!(safe_title("https://example.com/watch?v=dQw4w9WgXcQ"), None);
+        assert_eq!(safe_title(r"F:\secret\clip.mp4"), None);
+        assert_eq!(safe_title("token=abc123"), None);
+        assert_eq!(safe_title("dQw4w9WgXcQ"), None);
+        assert_eq!(safe_title("\u{0000}"), None);
     }
 
     #[test]
@@ -1288,14 +1411,18 @@ mod tests {
     }
 
     #[test]
-    fn tv_conversion_forces_h264_aac_and_faststart() {
+    fn tv_conversion_uses_smaller_h264_aac_and_faststart() {
         let args = tv_conversion_args(Path::new("clip.webm"), Path::new("clip.mp4"))
             .into_iter()
             .map(|value| value.to_string_lossy().into_owned())
             .collect::<Vec<_>>()
             .join(" ");
         assert!(args.contains("-c:v libx264"));
+        assert!(args.contains("-preset slow"));
+        assert!(args.contains("-crf 26"));
+        assert!(!args.contains("-crf 20"));
         assert!(args.contains("-c:a aac"));
+        assert!(args.contains("-b:a 128k"));
         assert!(args.contains("-pix_fmt yuv420p"));
         assert!(args.contains("-movflags +faststart"));
         assert!(args.contains("-progress pipe:1"));
@@ -1320,6 +1447,9 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair[0] == "--print" && pair[1] == "after_move:filepath"));
+        assert!(args.iter().any(|value| value.as_str() == "--progress"));
+        assert!(args.windows(2).any(|pair| pair[0] == "--progress-template"
+            && pair[1].as_str() == PROGRESS_TEMPLATE));
         assert!(progress_line("[download] Destination: F:\\Videos\\clip.mp4", 0, 1).is_none());
     }
 

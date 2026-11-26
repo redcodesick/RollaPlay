@@ -17,6 +17,7 @@ export type DownloadProgress = {
   total: number
   phase: DownloadPhase
   percent: number | null
+  title: string
   detail: string
 }
 

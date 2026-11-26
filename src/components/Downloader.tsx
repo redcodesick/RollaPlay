@@ -8,6 +8,7 @@ import {
   cancelDownload, getDownloaderTools, installToolsWinget, onDownloadProgress, onToolInstallProgress,
   prepareTools, startDownload, type DownloadProgress, type DownloaderTools,
 } from '../downloader'
+import { clampedPercent, phaseLabel, progressCounter, progressIdentity } from '../downloader-progress'
 
 // The backend job outlives this view. Keep UI state in memory so switching
 // pages does not make an active download look like it vanished.
@@ -109,7 +110,11 @@ export default function Downloader() {
     void onDownloadProgress((update) => {
       if (disposed) return
       debugLog('downloader', 'progress_event', { index: update.index, phase: update.phase, percent: update.percent })
-      setProgress((current) => ({ ...current, [update.index]: update }))
+      setProgress((current) => {
+        const previous = current[update.index]
+        const merged: DownloadProgress = { ...update, title: update.title || previous?.title || '' }
+        return { ...current, [update.index]: merged }
+      })
       if (update.phase === 'complete') {
         completedRef.current.add(update.index)
         if (completedRef.current.size >= update.total) {
@@ -347,21 +352,29 @@ export default function Downloader() {
             <span className="download-progress-percent">{installTotal > 1 ? `Step ${installStep} of ${installTotal}` : 'Installing'}</span>
           </div>}
           {orderedProgress.length > 0 && <div className="download-progress-list">
-            {orderedProgress.map((item) => (
-              <div key={item.index} className={`download-progress-row phase-${item.phase}`}>
-                <span className={`download-phase phase-${item.phase}`}>{item.phase === 'complete' ? <Check size={14} /> : item.phase === 'failed' ? <AlertCircle size={14} /> : item.phase === 'cancelled' ? <X size={14} /> : <LoaderCircle size={14} className="spin-icon" />}</span>
-                <span className="download-progress-copy">
-                  <strong>{item.total > 1 ? `Link ${item.index + 1} of ${item.total}` : 'Download'}</strong>
-                  <small>{item.detail}</small>
-                  {item.percent !== null && item.phase !== 'failed' && item.phase !== 'cancelled' && <>
-                    <span className="download-progress-track">
-                      <span style={{ width: `${Math.max(0, Math.min(100, item.percent))}%` }} />
-                    </span>
-                    <span className="download-progress-percent">{Math.max(0, Math.min(100, item.percent))}%</span>
-                  </>}
-                </span>
-              </div>
-            ))}
+            {orderedProgress.map((item) => {
+              const percent = clampedPercent(item.percent)
+              const counter = progressCounter(item)
+              return (
+                <div key={item.index} className={`download-progress-row phase-${item.phase}`}>
+                  <span className={`download-phase phase-${item.phase}`}>{item.phase === 'complete' ? <Check size={14} /> : item.phase === 'failed' ? <AlertCircle size={14} /> : item.phase === 'cancelled' ? <X size={14} /> : <LoaderCircle size={14} className="spin-icon" />}</span>
+                  <span className="download-progress-copy">
+                    <strong>{progressIdentity(item)}</strong>
+                    <small>
+                      {counter && <span className="download-progress-counter">{counter} · </span>}
+                      <span className="download-progress-state">{phaseLabel(item.phase)}</span>
+                      {item.detail && ` · ${item.detail}`}
+                    </small>
+                    {percent !== null && item.phase !== 'failed' && item.phase !== 'cancelled' && <>
+                      <span className="download-progress-track">
+                        <span style={{ width: `${percent}%` }} />
+                      </span>
+                      <span className="download-progress-percent">{percent}%</span>
+                    </>}
+                  </span>
+                </div>
+              )
+            })}
           </div>}
           {orderedProgress.length > 0 && <ul className="download-summary">
             <li>{completedCount} completed</li>

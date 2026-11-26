@@ -2952,6 +2952,16 @@ summary:focus-visible {
   font-size: 10px;
 }
 
+.download-progress-counter {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.download-progress-state {
+  color: var(--orange);
+  font-weight: 700;
+}
+
 .download-progress-track {
   height: 6px;
   border-radius: 999px;
