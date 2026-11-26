@@ -1,0 +1,19 @@
+{
+  "version": "0.4.4",
+  "notes": "## RollaPlay 0.4.4\n\nSigned Windows update. Published 2026-11-27.\n\n### Added\n\n- Failed Downloader rows now offer **Retry** and **Skip**. Retry reruns the failed link and any unfinished links after it; Skip marks the link skipped and continues with the remaining links.\n- Resumed downloads keep the original `Link N of M` positions. Completed, skipped and cancelled links are never downloaded twice, and skipped links get their own phase and summary count.\n\n### Changed\n\n- Library indexing now waits until every original link is settled and at least one file completed, so a failed or sign-in-only link is never silently treated as done.\n\nUpdates come from official GitHub Releases and are verified before installation. Nothing installs silently and your library, playlists and settings stay on this device.",
+  "pub_date": "2026-11-26T22:29:14.000Z",
+  "platforms": {
+    "windows-x86_64-nsis": {
+      "url": "https://github.com/redcodesick/RollaPlay/releases/download/v0.4.4/RollaPlay_0.4.4_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTZld6M0I0UmFPcGhYaFFqWldhME5hUFIrNU5XUWovY25LYVptRjNvUFNodm1mcFpHaDdpdlp6NFZOV3pkdDJHRXBOSzBVc2lVMWE3aUQ3T09pUHJKSUVsb1NwNEprZGdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzMyMTQ2CWZpbGU6Um9sbGFQbGF5XzAuNC40X3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjQuNApWTGl2VTZDcEVac203TUJjN0JjMEFTRmYxN09vdTZUcXBLSHhzN0M5eklDSGFHY25VZ2YrRXJuMTQ0Ujg3VmJDdm5TT0JhQnNza091OGdPSmEyYTdCUT09Cg=="
+    },
+    "windows-x86_64-msi": {
+      "url": "https://github.com/redcodesick/RollaPlay/releases/download/v0.4.4/RollaPlay_0.4.4_x64_en-US.msi",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTZld6M0I0UmFPcGhDY3hZL3paeXJNWjZ4eEQ2bTg1QTBOOUhTaGl1cDhuRHJUbDZGalhZbkI2THlqbGovOEJlWmE2WFlDaSswUVBUajR4d1R5TVdXby80MENrQkVObXdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzMyMTQ2CWZpbGU6Um9sbGFQbGF5XzAuNC40X3g2NF9lbi1VUy5tc2kJdmVyc2lvbjowLjQuNApWMG5qOHdIc01VT0dVSStrSUFYcFE4cnJsbWhKZmQrWktxVXRoSWpPcTZWTzRoV0xLeGttc2NLdkNIRkIza3ZaR3pHRlUwM1B3YXE1cW9OUGF4YU1BZz09Cg=="
+    },
+    "windows-x86_64": {
+      "url": "https://github.com/redcodesick/RollaPlay/releases/download/v0.4.4/RollaPlay_0.4.4_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTZld6M0I0UmFPcGhYaFFqWldhME5hUFIrNU5XUWovY25LYVptRjNvUFNodm1mcFpHaDdpdlp6NFZOV3pkdDJHRXBOSzBVc2lVMWE3aUQ3T09pUHJKSUVsb1NwNEprZGdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzMyMTQ2CWZpbGU6Um9sbGFQbGF5XzAuNC40X3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjQuNApWTGl2VTZDcEVac203TUJjN0JjMEFTRmYxN09vdTZUcXBLSHhzN0M5eklDSGFHY25VZ2YrRXJuMTQ0Ujg3VmJDdm5TT0JhQnNza091OGdPSmEyYTdCUT09Cg=="
+    }
+  }
+}
