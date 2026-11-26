@@ -177,8 +177,8 @@ Build/test results for the current 0.1.1 run: `cargo test --manifest-path src-ta
 
 ### Downloader (YouTube → Cast-friendly MP4)
 
-- [x] yt-dlp is fetched from its official GitHub release into the app-local `bin` directory on first use; the installer contains no third-party binaries. The PowerShell installer was executed against a temporary directory and produced `yt-dlp.exe` successfully.
-- [x] HD mode fetches the official FFmpeg shared build from GitHub only when ticked; extraction copies `ffmpeg.exe` and its DLLs to the same app-local directory and never into the install folder.
+- [x] yt-dlp is fetched from its official GitHub release into the app-local `bin` directory only when the user presses an install button; the installer contains no third-party binaries. The PowerShell installer was executed against a temporary directory and produced `yt-dlp.exe` successfully.
+- [x] FFmpeg is fetched from its official GitHub release only when the user presses an install button; extraction copies `ffmpeg.exe` and its DLLs to the same app-local directory and never into the install folder.
 - [x] Only YouTube HTTP(S) hosts are accepted; file URLs, other hosts and malformed input are rejected. Progress parser reads `0.0%`–`100.0%` and drops `Destination:` lines so no absolute path reaches diagnostics. Rust unit tests cover both rules.
 - [x] A real single-video download with the standard format produced a `mov,mp4` file with `h264` video and `aac` audio (verified with `ffprobe`). Whole playlist links use yt-dlp's `--yes-playlist` mode and one progress row per pasted link.
 - [x] The WinGet installer script was executed with both tool checkboxes: it upgraded FFmpeg to the latest package, treated WinGet's "already installed / no upgrade" code as success, and streamed each status line so the Downloader status card shows live progress.
@@ -191,6 +191,12 @@ Build/test results for the current 0.1.1 run: `cargo test --manifest-path src-ta
 - [x] User-reported: after installing the tools with WinGet, a public YouTube download completes and the MP4 files appear in the chosen folder. The earlier silent "Downloading…" failure no longer occurs.
 - [x] An empty playlist now has an **Add videos from folder** action that opens the native folder picker, adds and scans the folders, and adds the newly indexed videos to that playlist.
 - [ ] On a fresh install, tick HD, paste a public playlist link, choose a folder, then confirm every video appears in Recently added and plays with picture on the receiver. A private link must still show the private-link explanation instead of a generic failure.
+
+## 0.4.2 update startup check
+
+- [x] One updater instance is owned by the app shell. A single startup pass reads the signed stable manifest, and the About panel reuses that result instead of starting a second check. The pass is read-only: download, install and restart each still need a separate explicit click.
+- [x] An available release shows a dismissible in-app banner with a link to the About panel's signed release notes. Startup errors stay confined to the updater panel and never trigger an install.
+- [ ] On an installed 0.4.1 build, launch 0.4.2 and confirm the startup banner appears for the published release, that dismissing it hides the notice, and that choosing **Download & Install** is the only action that writes to disk.
 
 ## 0.3.0 visual polish verification
 
