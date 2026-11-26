@@ -1,36 +1,35 @@
-# Release preparation — 0.4.1
+# Release verification — 0.4.1
 
-Prepared locally on 2026-11-26. **Not published.** No commit, tag, push, GitHub Release, or `latest.json` upload has been made for `0.4.1`.
+Published on 2026-11-26 by explicit user approval. The previously pushed source commit is `6733778`; the stable tag `v0.4.1` was pushed to `github/main` and the signed release workflow completed successfully (run `45865300135`). The `v0.4.0` release and its assets remain untouched.
 
-Tag intended for a future release: `v0.4.1`. The published `v0.4.0` release and its assets remain untouched.
+Release: https://github.com/redcodesick/RollaPlay/releases/tag/v0.4.1
 
-## Why a new version
+## Why this version
 
-`0.4.0` is already published with downloaded assets. `0.4.1` is a fresh version containing the queue/notice fixes, redacted Settings diagnostics and streaming-quality panel, Cast status/time fix, AV1 WebM compatibility warning, and opt-in TV-compatible Downloader conversion. It must not overwrite any `0.4.0` asset.
+`0.4.1` contains the queue/notice fixes, redacted Settings diagnostics and streaming-quality panel, Cast status/time fix, AV1 WebM compatibility warning, and opt-in TV-compatible Downloader conversion. It does not overwrite any `0.4.0` asset.
 
-## Local signed artifacts
+## Published signed artifacts
 
-Rebuilt with `pnpm tauri build --ci` after the final Downloader conversion change, using the protected local updater key; the signing environment variables were cleared immediately afterward. Older local `0.4.1` artifacts are stale and superseded by these files.
+Built, signed, and uploaded by `.github/workflows/release.yml` from the `v0.4.1` tag. The local bundle directory now mirrors the published assets; the earlier local-only build artifacts are superseded.
 
-- `src-tauri/target/release/bundle/nsis/RollaPlay_0.4.1_x64-setup.exe` — 7,198,087 bytes, SHA-256 `dea02c0aaef0a9d5bbedb8e3f8fe72814e77c3f1221e88e082aa4149c9f4a035`
-- `src-tauri/target/release/bundle/nsis/RollaPlay_0.4.1_x64-setup.exe.sig` — 440 bytes
-- `src-tauri/target/release/bundle/msi/RollaPlay_0.4.1_x64_en-US.msi` — 9,474,048 bytes, SHA-256 `306e3e5aad7b892dde999d779910ff7d4bc05e49719bc923684db824c8f60cb4`
-- `src-tauri/target/release/bundle/msi/RollaPlay_0.4.1_x64_en-US.msi.sig` — 440 bytes
+- `RollaPlay_0.4.1_x64-setup.exe` — 7,203,093 bytes, SHA-256 `ee849b0c8d67e2138bd3a9c30f4a5205d1ae119e52bc5502f11fd558985396f2`
+- `RollaPlay_0.4.1_x64-setup.exe.sig` — 440 bytes
+- `RollaPlay_0.4.1_x64_en-US.msi` — 9,474,048 bytes, SHA-256 `9a5be542ea99f61091557d272d614167f1f37fcc547daae7c882eefbb4f28b19`
+- `RollaPlay_0.4.1_x64_en-US.msi.sig` — 440 bytes
 
-## Local manifest candidate
+## Published manifest
 
-`docs/release-0.4.1-latest.json` was generated from the signed local artifacts with `scripts/create-latest-json.mjs`.
+`docs/release-0.4.1-latest.json` is a byte-for-byte copy of the published `latest.json`. It was regenerated from the actual published release body and the uploaded signed assets, then re-uploaded with `--clobber` so the release notes are the curated 0.4.1 notes rather than the workflow's generated full-changelog link.
 
 - `version`: `0.4.1`
-- `pub_date`: `2026-11-26T17:02:03.569Z` — this is the local preparation timestamp, not a publication timestamp
-- `notes`: 3,882 characters, constrained Markdown, no raw HTML
+- `pub_date`: `2026-11-26T17:17:54.000Z` — taken from the real GitHub Release publication time
+- `notes`: 3,882 characters, constrained Markdown, no raw HTML; matches `docs/release-notes-0.4.1.md`
 - `windows-x86_64-nsis`, `windows-x86_64-msi`, and `windows-x86_64` entries are present
-- Both installer signatures in the manifest match the local `.sig` files byte-for-byte
-- URLs point to the future `v0.4.1` release assets, which do not exist yet
+- Both installer signatures in the manifest match the published `.sig` assets byte-for-byte
+- URLs point to the live `v0.4.1` release assets
+- No screenshots are attached to the release
 
-The release workflow must regenerate `latest.json` from the actual published release body and uploaded signed assets. This local candidate is for inspection only and must not be uploaded as-is.
-
-## Verification completed locally
+## Verification completed locally before tagging
 
 - `node --check src-tauri/cast-sender/sender.js` — passed
 - `node scripts/verify-release-version.mjs v0.4.1` — passed; all five version declarations are synchronized
@@ -40,6 +39,13 @@ The release workflow must regenerate `latest.json` from the actual published rel
 - `cargo test --locked --manifest-path src-tauri/Cargo.toml` — 114 passed, 0 failed, 1 pre-existing ignored
 - `git diff --check` — passed; only CRLF normalization warnings for `Cargo.lock` and `PlayerBar.tsx`
 - `rustfmt --check --config skip_children=true src-tauri/src/diagnostics.rs` — clean; repository-wide formatting still has pre-existing differences in untouched files
+
+## Verification after publication
+
+- Workflow run `45865300135`: all steps passed, including stable tag/version verification, signed artifact verification, release creation, manifest generation/upload, and published asset verification.
+- Published release is public, not a draft and not a prerelease.
+- Published `latest.json`: version `0.4.1`, RFC 3339 `pub_date`, 3,882-character notes, live NSIS/MSI URLs, and signatures matching the published `.sig` files.
+- Published assets are exactly `latest.json`, the NSIS installer and signature, and the MSI installer and signature. No screenshots are attached.
 
 ## Review fixes included
 
@@ -54,8 +60,6 @@ The release workflow must regenerate `latest.json` from the actual published rel
 - Diagnostics now correlates the selected receiver with the active session, reports allow-listed WLAN and receiver-fetch tiers, and records only fixed event codes in a capped in-memory log. Windows WLAN parsing discards SSID, BSSID, MAC, adapter name, and raw command output before serialization.
 - Downloader's opt-in TV-compatible mode probes the real audio/video streams, re-encodes only unsupported files to H.264/AAC MP4 with `faststart`, verifies the result, and replaces the original only after success. FFmpeg stderr and file paths are never shown or logged; failures and cancellation keep the original.
 
-## Publication gate
-
-Nothing has been published. A fresh explicit approval is required before committing, tagging `v0.4.1`, pushing, creating the GitHub Release, or uploading `latest.json`.
+## Update note
 
 Windows SmartScreen will still report an unknown publisher because no OV/EV Authenticode code-signing certificate is configured. Updater artifacts remain minisigned and verified by the embedded public key.
